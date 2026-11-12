@@ -72,6 +72,10 @@ fit() {
 		printf -v cp '%d' "'$ch"
 		char_width "$cp"
 		cw=$REPLY
+		if (( cw == 0 )); then
+			out+=$ch
+			continue
+		fi
 		# The last character can use the cell that the ellipsis needs.
 		if (( used + cw > w )) || (( used + cw == w && i < n - 1 )); then
 			out+=…
