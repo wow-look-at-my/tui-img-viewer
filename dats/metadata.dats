@@ -514,6 +514,83 @@ tests:
 			6: ''
 		!stderr:
 			0: ''
+	- desc: exr-gray.exr
+	  cmd: bash {shared.probe.sh} dats/fixtures/meta/exr-gray.exr
+	  outputs:
+		stdout:
+			0: '^alpha=0$'
+			1: '^bits=32$'
+			2: '^color=Gray$'
+			3: '^detail=none, float$'
+			4: '^format=EXR$'
+			5: '^height=30$'
+			6: '^width=40$'
+		!stdout:
+			7: ''
+		!stderr:
+			0: ''
+	- desc: exr-rgb-half.exr
+	  cmd: bash {shared.probe.sh} dats/fixtures/meta/exr-rgb-half.exr
+	  outputs:
+		stdout:
+			0: '^alpha=0$'
+			1: '^bits=16$'
+			2: '^color=RGB$'
+			3: '^detail=ZIP, half$'
+			4: '^format=EXR$'
+			5: '^height=30$'
+			6: '^width=40$'
+		!stdout:
+			7: ''
+		!stderr:
+			0: ''
+	- desc: exr-rgba.exr
+	  cmd: bash {shared.probe.sh} dats/fixtures/meta/exr-rgba.exr
+	  outputs:
+		stdout:
+			0: '^alpha=1$'
+			1: '^bits=32$'
+			2: '^color=RGBA$'
+			3: '^detail=RLE, float$'
+			4: '^format=EXR$'
+			5: '^height=30$'
+			6: '^width=40$'
+		!stdout:
+			7: ''
+		!stderr:
+			0: ''
+	- desc: hdr-ffmpeg.hdr
+	  cmd: bash {shared.probe.sh} dats/fixtures/meta/hdr-ffmpeg.hdr
+	  outputs:
+		stdout:
+			0: '^alpha=0$'
+			1: '^color=RGB$'
+			2: '^data_offset=80$'
+			3: '^detail=RGBE$'
+			4: '^format=HDR$'
+			5: '^height=30$'
+			6: '^scan_order=-Y \+X$'
+			7: '^width=40$'
+		!stdout:
+			8: ''
+		!stderr:
+			0: ''
+	- desc: hdr-xyze.hdr
+	  cmd: bash {shared.probe.sh} dats/fixtures/meta/hdr-xyze.hdr
+	  outputs:
+		stdout:
+			0: '^alpha=0$'
+			1: '^color=RGB$'
+			2: '^data_offset=65$'
+			3: '^detail=XYZE, exposure 1\.5$'
+			4: '^format=HDR$'
+			5: '^height=2$'
+			6: '^scan_order=\+Y \+X$'
+			7: '^width=3$'
+		!stdout:
+			8: ''
+		!stderr:
+			0: ''
 	- desc: bad-empty.bin is rejected
 	  cmd: bash {shared.neg.sh} dats/fixtures/meta/bad-empty.bin
 	  outputs:
@@ -544,6 +621,27 @@ tests:
 			0: ''
 	- desc: bad-soi-only.jpg is rejected
 	  cmd: bash {shared.neg.sh} dats/fixtures/meta/bad-soi-only.jpg
+	  outputs:
+		stdout:
+			0: '^rc=1 keys=0$'
+		!stderr:
+			0: ''
+	- desc: bad-exr-trunc.exr is rejected
+	  cmd: bash {shared.neg.sh} dats/fixtures/meta/bad-exr-trunc.exr
+	  outputs:
+		stdout:
+			0: '^rc=1 keys=0$'
+		!stderr:
+			0: ''
+	- desc: bad-hdr-nores.hdr is rejected
+	  cmd: bash {shared.neg.sh} dats/fixtures/meta/bad-hdr-nores.hdr
+	  outputs:
+		stdout:
+			0: '^rc=1 keys=0$'
+		!stderr:
+			0: ''
+	- desc: bad-hdr-zero.hdr is rejected
+	  cmd: bash {shared.neg.sh} dats/fixtures/meta/bad-hdr-zero.hdr
 	  outputs:
 		stdout:
 			0: '^rc=1 keys=0$'

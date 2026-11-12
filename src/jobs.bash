@@ -216,6 +216,29 @@ job_image() {
 		7) turn=transpose=3, ;;
 		8) turn=transpose=2, ;;
 	esac
+	# ffmpeg reads the file through a link, so no file name can look like an option or a sequence pattern.
+	ln -s -- "$path" "$JOB_OUT/src"
+	local -a input=(-noautorotate -i "$JOB_OUT/src")
+	case $format in
+		EXR)
+			# The picture holds linear light. The decoder applies the sRGB curve.
+			input=(-apply_trc iec61966_2_1 -i "$JOB_OUT/src")
+			;;
+		HDR)
+			if [[ ${META[scan_order]-} == '-Y +X' && $(ffmpeg -hide_banner -decoders 2>/dev/null) == *' hdr '* ]]; then
+				# This ffmpeg reads the format. Its output is linear light, so the sRGB curve follows here.
+				local curve='if(lte(val/maxval,0.0031308),12.92*val,(1.055*pow(val/maxval,1/2.4)-0.055)*maxval)'
+				input=(-i "$JOB_OUT/src")
+				turn="format=gbrp16le,lutrgb=r='$curve':g='$curve':b='$curve',"
+			elif job_radiance "$path" "$w" "$h" "$out_w" "$out_h"; then
+				input=(-f rawvideo -pixel_format "$RAD_FORMAT" -video_size "${w}x$RAD_ROWS" -i "$JOB_OUT/planes")
+				turn=$RAD_FILTER
+			else
+				job_write err 'this Radiance file has a layout that the decoder does not know'
+				return
+			fi
+			;;
+	esac
 	local pix='format=pix_fmts=rgb24|rgba|gray|ya8' graph
 	local -a enc=(-frames:v 1 -c:v png -pred mixed -f image2 -update 1) outs
 	if (( stages == 2 )); then
@@ -227,9 +250,7 @@ job_image() {
 		graph="[0:v]${turn}scale=${out_w}:${out_h}:flags=lanczos,${pix}[f]"
 		outs=(-map '[f]' "${enc[@]}" "$JOB_OUT/1.png")
 	fi
-	# ffmpeg reads the file through a link, so no file name can look like an option or a sequence pattern.
-	ln -s -- "$path" "$JOB_OUT/src"
-	if ! job_run ffmpeg -nostdin -y -v error -noautorotate -i "$JOB_OUT/src" \
+	if ! job_run ffmpeg -nostdin -y -v error "${input[@]}" \
 		-filter_complex "$graph" "${outs[@]}" 2> "$JOB_OUT/log"; then
 		local reason=
 		[[ -s $JOB_OUT/log ]] && reason=$(tail -n 1 -- "$JOB_OUT/log")
@@ -242,6 +263,28 @@ job_image() {
 	else
 		job_stage 1 "$JOB_OUT/1.png" "$out_w" "$out_h"
 	fi || job_write err 'cannot encode the preview'
+}
+
+# Decodes a Radiance picture into raw planes for ffmpeg. Sets RAD_FILTER to
+# the filters that turn the planes into a normal picture.
+job_radiance() {
+	local path=$1 w=$2 h=$3 out_w=$4 out_h=$5 flips=''
+	case ${META[scan_order]-} in
+		'-Y +X') ;;
+		'+Y +X') flips=vflip, ;;
+		'-Y -X') flips=hflip, ;;
+		'+Y -X') flips=hflip,vflip, ;;
+		*) return 1 ;;
+	esac
+	# Scan lines that the preview cannot show are not decoded.
+	local step=$(( h / out_h ))
+	(( step < 1 )) && step=1
+	radiance_planes "$path" "${META[data_offset]}" "$w" "$h" "$step" "$JOB_OUT/planes" || return 1
+	# Mantissa and exponent cannot be averaged, so the first cut in width takes whole pixels.
+	local near_w=$(( out_w * 2 ))
+	(( near_w > w )) && near_w=$w
+	radiance_filter
+	RAD_FILTER="scale=${near_w}:${RAD_ROWS}:flags=neighbor,format=gbrap,${REPLY},format=gbrp,${flips}"
 }
 
 # Reads the size of a file that the header parser does not know.

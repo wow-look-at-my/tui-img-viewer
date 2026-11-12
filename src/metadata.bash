@@ -47,6 +47,10 @@ meta_be32() {
 meta_le32() {
 	META_N=$((META_B[$1] | META_B[$1 + 1] << 8 | META_B[$1 + 2] << 16 | META_B[$1 + 3] << 24))
 }
+meta_sle32() {
+	meta_le32 "$1"
+	((META_N < 0x80000000)) || META_N=$((META_N - 0x100000000))
+}
 # Readers in the TIFF byte order (META_LE).
 meta_u16() {
 	if ((META_LE)); then meta_le16 "$1"; else meta_be16 "$1"; fi
@@ -68,6 +72,38 @@ meta_str() {
 		s+=$c
 	done
 	META_S=${s%"${s##*[! ]}"}
+}
+
+# meta_find FILE OFFSET MAX BYTE puts the offset of the next BYTE into META_N.
+# BYTE must come within MAX bytes.
+meta_find() {
+	local p=$2 end=$(($2 + $3)) i stop
+	while ((p < end)); do
+		meta_need "$1" "$p" 1 || return 1
+		stop=$((META_BOFF + ${#META_B[@]}))
+		((stop > end)) && stop=$end
+		for ((i = META_I; p < stop; p++, i++)); do
+			if ((META_B[i] == $4)); then
+				META_N=$p
+				return 0
+			fi
+		done
+	done
+	return 1
+}
+
+# meta_cstr FILE OFFSET MAX TERM is meta_find, and it also puts the text up to
+# TERM into META_S. META_N gets the offset after TERM.
+meta_cstr() {
+	local p
+	meta_find "$@" || return 1
+	p=$META_N
+	META_S=""
+	if ((p > $2)); then
+		meta_need "$1" "$2" $((p - $2)) || return 1
+		meta_str "$META_I" $((p - $2))
+	fi
+	META_N=$((p + 1))
 }
 
 # meta_dec1 NUM DEN puts NUM/DEN with at most one fraction digit into META_S.
@@ -510,6 +546,142 @@ meta_tiff() {
 	return 0
 }
 
+# meta_chlist FILE OFFSET END walks an EXR channel list. META_S gets the names,
+# each with a space on both sides, and META_N the pixel type of the first channel.
+meta_chlist() {
+	local f=$1 p=$2 end=$3 k names=" " ptype=-1
+	for ((k = 0; k < 1024; k++)); do
+		meta_cstr "$f" "$p" $((end - p)) 0 || return 1
+		((META_N == p + 1)) && break
+		names+="$META_S "
+		p=$META_N
+		((p + 16 <= end)) || return 1
+		if ((ptype < 0)); then
+			meta_need "$f" "$p" 4 || return 1
+			meta_le32 "$META_I"
+			ptype=$META_N
+		fi
+		p=$((p + 16))
+	done
+	((ptype >= 0)) || return 1
+	META_S=$names
+	META_N=$ptype
+}
+
+meta_exr() {
+	local f=$1 pos=8 i ver name type size vpos x0 y0 ptype=-1 comp=-1 chans="" d
+	local -a cnames=(none RLE ZIPS ZIP PIZ PXR24 B44 B44A DWAA DWAB)
+	meta_need "$f" 0 8 || return 1
+	meta_le32 4
+	ver=$META_N
+	(((ver & 255) == 2)) || return 1
+	# A multi-part file ends its first header with the same NUL, so the walk reads only that part.
+	for ((i = 0; i < 256; i++)); do
+		meta_need "$f" "$pos" 1 || return 1
+		((META_B[META_I])) || break
+		meta_cstr "$f" "$pos" 256 0 || return 1
+		name=$META_S
+		meta_cstr "$f" "$META_N" 256 0 || return 1
+		type=$META_S
+		vpos=$((META_N + 4))
+		meta_need "$f" "$META_N" 4 || return 1
+		meta_le32 "$META_I"
+		size=$META_N
+		((size < 0x80000000 && vpos + size < 1048576)) || return 1
+		case $name:$type in
+		dataWindow:box2i)
+			((size == 16)) && meta_need "$f" "$vpos" 16 || return 1
+			meta_sle32 "$META_I"
+			x0=$META_N
+			meta_sle32 $((META_I + 4))
+			y0=$META_N
+			meta_sle32 $((META_I + 8))
+			META[width]=$((META_N - x0 + 1))
+			meta_sle32 $((META_I + 12))
+			META[height]=$((META_N - y0 + 1))
+			;;
+		channels:chlist)
+			meta_chlist "$f" "$vpos" $((vpos + size)) || return 1
+			chans=$META_S
+			ptype=$META_N
+			;;
+		compression:compression)
+			((size >= 1)) && meta_need "$f" "$vpos" 1 || return 1
+			comp=${META_B[META_I]}
+			;;
+		esac
+		pos=$((vpos + size))
+	done
+	((i < 256 && ptype >= 0 && comp >= 0)) && [[ -n ${META[width]-} ]] || return 1
+	case $ptype in
+	0) META[bits]=32 && d=uint ;;
+	1) META[bits]=16 && d=half ;;
+	2) META[bits]=32 && d=float ;;
+	*) return 1 ;;
+	esac
+	if ((comp < ${#cnames[@]})); then d="${cnames[comp]}, $d"; else d="$comp, $d"; fi
+	((ver & 0x200)) && d+=", tiled"
+	((ver & 0x1000)) && d+=", multi-part"
+	((ver & 0x800)) && d+=", deep"
+	META[detail]=$d
+	if [[ $chans == *" R "* && $chans == *" G "* && $chans == *" B "* ]]; then
+		if [[ $chans == *" A "* ]]; then META[color]=RGBA; else META[color]=RGB; fi
+	elif [[ $chans == *" Y "* && $chans == *" RY "* && $chans == *" BY "* ]]; then
+		META[color]=YCbCr
+	elif [[ $chans == *" Y "* ]]; then
+		if [[ $chans == *" A "* ]]; then META[color]=Gray+Alpha; else META[color]=Gray; fi
+	fi
+	if [[ $chans == *" A "* ]]; then META[alpha]=1; else META[alpha]=0; fi
+	return 0
+}
+
+meta_hdr() {
+	local f=$1 pos next line end fmt=RGBE expo=""
+	local re='^([-+][XY]) +([0-9]{1,9}) +([-+][XY]) +([0-9]{1,9})$'
+	# The text header, the resolution line included, must end within this many bytes.
+	end=65536
+	meta_find "$f" 0 "$end" 10 || return 1
+	pos=$((META_N + 1))
+	while :; do
+		meta_find "$f" "$pos" $((end - pos)) 10 || return 1
+		((META_N == pos)) && break
+		next=$((META_N + 1))
+		# Only FORMAT and EXPOSURE lines matter; the text of other lines is never built.
+		meta_need "$f" "$pos" 1 || return 1
+		if ((META_B[META_I] != 69 && META_B[META_I] != 70)); then
+			pos=$next
+			continue
+		fi
+		meta_cstr "$f" "$pos" $((next - pos)) 10 || return 1
+		pos=$next
+		line=$META_S
+		case $line in
+		FORMAT=32-bit_rle_rgbe) fmt=RGBE ;;
+		FORMAT=32-bit_rle_xyze) fmt=XYZE ;;
+		FORMAT=*) return 1 ;;
+		EXPOSURE=*) [[ -n $expo ]] || expo=${line#EXPOSURE=} ;;
+		esac
+	done
+	pos=$((META_N + 1))
+	meta_cstr "$f" "$pos" $((end - pos)) 10 || return 1
+	[[ $META_S =~ $re ]] || return 1
+	[[ ${BASH_REMATCH[1]:1} != "${BASH_REMATCH[3]:1}" ]] || return 1
+	if [[ ${BASH_REMATCH[1]} == ?Y ]]; then
+		META[height]=$((10#${BASH_REMATCH[2]}))
+		META[width]=$((10#${BASH_REMATCH[4]}))
+	else
+		META[width]=$((10#${BASH_REMATCH[2]}))
+		META[height]=$((10#${BASH_REMATCH[4]}))
+	fi
+	META[scan_order]="${BASH_REMATCH[1]} ${BASH_REMATCH[3]}"
+	META[data_offset]=$META_N
+	META[color]=RGB
+	META[alpha]=0
+	expo=${expo#"${expo%%[! ]*}"}
+	META[detail]=$fmt${expo:+, exposure $expo}
+	return 0
+}
+
 # meta_probe FILE fills META.
 meta_probe() {
 	local f=${1-} sig rc=1
@@ -526,6 +698,9 @@ meta_probe() {
 	424d*) META[format]=BMP && meta_bmp "$f" && rc=0 ;;
 	52494646????????57454250) META[format]=WebP && meta_webp "$f" && rc=0 ;;
 	49492a00* | 4d4d002a*) META[format]=TIFF && meta_tiff "$f" && rc=0 ;;
+	762f3101*) META[format]=EXR && meta_exr "$f" && rc=0 ;;
+	# "#?RADIANCE" or "#?RGBE", then a newline.
+	233f52414449414e43450a* | 233f524742450a*) META[format]=HDR && meta_hdr "$f" && rc=0 ;;
 	esac
 	META_B=()
 	if ((rc == 0 && ${META[width]:-0} > 0 && ${META[height]:-0} > 0)); then

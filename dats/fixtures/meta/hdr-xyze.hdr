@@ -1,0 +1,8 @@
+#?RGBE
+EXPOSURE=1.5
+FORMAT=32-bit_rle_xyze
+EXPOSURE=2
+
++Y 2 +X 3
+	
+

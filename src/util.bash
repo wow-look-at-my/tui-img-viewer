@@ -36,7 +36,7 @@ human_size() {
 is_image() {
 	case ${1,,} in
 		*.png | *.jpg | *.jpeg | *.jpe | *.jfif | *.gif | *.webp | *.bmp | *.tif | *.tiff) return 0 ;;
-		*.avif | *.heic | *.heif | *.jxl | *.ico | *.tga | *.ppm | *.pgm | *.pbm | *.pnm | *.qoi | *.svg) return 0 ;;
+		*.exr | *.hdr | *.avif | *.heic | *.heif | *.jxl | *.ico | *.tga | *.ppm | *.pgm | *.pbm | *.pnm | *.qoi | *.svg) return 0 ;;
 	esac
 	return 1
 }

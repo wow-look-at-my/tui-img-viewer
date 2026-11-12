@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Regenerates every fixture in dats/fixtures/meta/ for dats/metadata.dats.
-# Needs ImageMagick convert. The output is deterministic for one tool version.
+# Needs ImageMagick convert and ffmpeg. The output is deterministic for one tool version.
 set -o errexit -o nounset -o pipefail
 
 out=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/meta
@@ -244,6 +244,19 @@ tiffhex=$(tiffblock \
 pix=""
 hexbin "$tiffhex" >"$out/tiff-exif-be.tif"
 
+# --- OpenEXR, Radiance HDR ---
+# ImageMagick here has no EXR coder. The ffmpeg writers put no time or version in the file.
+ff=(ffmpeg -nostdin -y -v error -f lavfi -i testsrc=size=40x30:rate=1 -frames:v 1)
+"${ff[@]}" -c:v exr -format half -compression zip16 "$out/exr-rgb-half.exr"
+"${ff[@]}" -pix_fmt gbrapf32le -c:v exr -format float -compression rle "$out/exr-rgba.exr"
+"${ff[@]}" -pix_fmt grayf32le -c:v exr -format float -compression none "$out/exr-gray.exr"
+"${ff[@]}" -c:v hdr "$out/hdr-ffmpeg.hdr"
+# Bottom-up rows, XYZE, EXPOSURE lines, then 3x2 pixels of a few bytes each.
+{
+	printf '#?RGBE\nEXPOSURE=1.5\nFORMAT=32-bit_rle_xyze\nEXPOSURE=2\n\n+Y 2 +X 3\n'
+	hexbin "$(printf '%02x' {1..24})"
+} >"$out/hdr-xyze.hdr"
+
 # --- Negative cases ---
 : >"$out/bad-empty.bin"
 printf 'This is a plain text file, not an image.\n' >"$out/bad-text.txt"
@@ -251,3 +264,7 @@ head -c 20 "$out/png-rgb.png" >"$out/bad-png-trunc.png"
 # Cut inside the EXIF APP1 segment, before any SOF.
 head -c 120 "$out/jpeg-exif-le.jpg" >"$out/bad-jpeg-trunc.jpg"
 printf '\xff\xd8' >"$out/bad-soi-only.jpg"
+# Cut inside the compression attribute, after the channel list.
+head -c 100 "$out/exr-rgb-half.exr" >"$out/bad-exr-trunc.exr"
+printf '#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n' >"$out/bad-hdr-nores.hdr"
+printf '#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 0 +X 3\n\x02\x02\x00\x03' >"$out/bad-hdr-zero.hdr"
