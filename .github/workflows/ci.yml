@@ -22,7 +22,16 @@ jobs:
       - uses: wow-look-at-my/actions@cached-apt#latest
         with:
           packages: tmux ffmpeg shellcheck
-      - run: curl -fsSL https://apt.pazer.build/dats/install.sh | sudo sh
-      - run: curl -fsSL https://apt.pazer.build/bashfs/install.sh | sudo sh
-      - run: sudo apt-get install -y dats bashfs
+      - uses: wow-look-at-my/actions@secret-server#latest
+      # bashfs is a private package. The authenticated apt source lists it and dats.
+      - name: Install dats and bashfs
+        shell: bash
+        run: |
+          if [[ -z ${BUILDHOST_READ_TOKEN-} ]]; then
+            echo "::error::secret-server gave no BUILDHOST_READ_TOKEN, and the bashfs package needs one"
+            exit 1
+          fi
+          curl -fsSL -H "Authorization: Bearer $BUILDHOST_READ_TOKEN" https://apt.pazer.build/bashfs/install.sh \
+            | sudo BUILDHOST_TOKEN="$BUILDHOST_READ_TOKEN" sh
+          sudo apt-get install -y dats bashfs
       - run: dats dats/
