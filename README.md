@@ -72,7 +72,7 @@ Bright areas of an EXR or HDR picture clip at white. The decoder for `.hdr` is s
 - `+` and `-` change the preview quality, which is the number of bytes on the link.
 - A terminal that answers nothing gets a fixed send rate (`--rate`). The program then watches the byte counters of tmux. When tmux dropped part of an image, the image goes out again at half the rate.
 
-In tmux, the program turns on `allow-passthrough` for its own pane and restores it on exit.
+In tmux, the program turns on `allow-passthrough` for its own pane and restores it on exit. The tmux client must be in UTF-8 mode: use a UTF-8 locale or attach with `tmux -u`. The program says so when it is not.
 
 ## Develop
 

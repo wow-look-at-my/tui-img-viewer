@@ -55,6 +55,7 @@ tests:
 			- "images: 2"
 			- "graphics query: yes"
 			- "windows over the limit: 0"
+			- "image cells on the terminal: yes"
 
 	- desc: the same image arrives without tmux
 	  timeout: 60s
@@ -65,6 +66,16 @@ tests:
 			- "image 2: 613x460 complete"
 			- "images: 2"
 			- "graphics query: yes"
+			- "image cells on the terminal: yes"
+
+	- desc: a tmux client that is not in UTF-8 mode gets a clear message and no image
+	  timeout: 60s
+	  cmd: CLIENT_LOCALE=C bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:j w:2 shot:plain
+	  outputs:
+		stdout:
+			- 'tmux is not in UTF-8 mode: attach with "tmux -u", then press i'
+			- "images: 0"
+			- "image cells on the terminal: no"
 
 	- desc: on a slow link through tmux a key stops the transfer at once
 	  timeout: 90s

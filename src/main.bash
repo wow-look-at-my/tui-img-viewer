@@ -136,6 +136,10 @@ main() {
 	now_ms
 	[[ $GFX == off ]] || handshake_send
 	(( HAVE_FFMPEG )) || [[ $GFX == off ]] || status 'ffmpeg is not installed: only PNG files have a preview'
+	if (( IN_TMUX )) && [[ $GFX != off ]] && ! tmux_utf8; then
+		GFX=noutf8
+		status 'tmux is not in UTF-8 mode, so images cannot show: attach with "tmux -u"'
+	fi
 	preview_reset
 	render
 

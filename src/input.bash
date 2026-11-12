@@ -132,6 +132,16 @@ images_toggle() {
 		unknown)
 			return 0
 			;;
+		noutf8)
+			if ! tmux_utf8; then
+				status 'tmux is still not in UTF-8 mode: attach with "tmux -u"'
+				return 0
+			fi
+			# The terminal is asked again, since the first answers were not kept.
+			GFX=unknown
+			handshake_send
+			status 'image previews: on'
+			;;
 		*)
 			# A terminal that gave no answer before is asked again.
 			if [[ $GFX == off && $ACK_MODE == unknown ]]; then

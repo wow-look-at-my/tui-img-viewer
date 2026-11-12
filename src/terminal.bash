@@ -41,6 +41,14 @@ tmux_setup() {
 	TMUX_RESTORE=1
 }
 
+# tmux writes "_" in place of the cells of an image for a client that is
+# not in UTF-8 mode. Succeeds when the client can show those cells.
+tmux_utf8() {
+	local flag
+	flag=$(tmux display-message -p -t "$TMUX_PANE" '#{client_utf8}' 2>/dev/null) || return 0
+	[[ $flag != 0 ]]
+}
+
 tmux_restore() {
 	(( TMUX_RESTORE )) || return 0
 	TMUX_RESTORE=0

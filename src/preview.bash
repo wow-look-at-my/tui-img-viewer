@@ -128,6 +128,7 @@ preview_status() {
 		off) REPLY='off (press i)'; return ;;
 		unsupported) REPLY='no graphics support in this terminal (press i to force)'; return ;;
 		unknown) REPLY='asking the terminal…'; return ;;
+		noutf8) REPLY='tmux is not in UTF-8 mode: attach with "tmux -u", then press i'; return ;;
 	esac
 	if [[ $PV_KIND == error ]]; then
 		REPLY='failed'

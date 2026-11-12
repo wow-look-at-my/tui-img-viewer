@@ -15,7 +15,9 @@ socket=imgv-test
 
 printf -v command 'LC_ALL=C.UTF-8 TERM=xterm-256color %q %s %q' "$root/imgv" "${IMGV_ARGS-}" "$target"
 if [[ $mode == tmux ]]; then
-	printf -v command 'TERM=xterm-256color tmux -L %s -f /dev/null new-session %q' "$socket" "$command"
+	# The locale of the tmux client decides whether tmux writes UTF-8 to the terminal.
+	printf -v command 'LC_ALL=%q TERM=xterm-256color tmux -L %s -f /dev/null new-session %q' \
+		"${CLIENT_LOCALE:-C.UTF-8}" "$socket" "$command"
 fi
 
 now() {
@@ -117,4 +119,11 @@ echo "images: $images"
 echo "last image: $last"
 echo "graphics query: $queried"
 echo "windows over the limit: $over"
+# tmux writes "_" in place of an image cell for a client that is not in
+# UTF-8 mode. The cells must show in what the terminal received.
+if LC_ALL=C grep -q $'\xf4\x8e\xbb\xae' "$work/stream"; then
+	echo 'image cells on the terminal: yes'
+else
+	echo 'image cells on the terminal: no'
+fi
 rm -rf -- "$work"

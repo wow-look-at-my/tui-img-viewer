@@ -269,6 +269,14 @@ tmux_setup() {
 	TMUX_RESTORE=1
 }
 
+# tmux writes "_" in place of the cells of an image for a client that is
+# not in UTF-8 mode. Succeeds when the client can show those cells.
+tmux_utf8() {
+	local flag
+	flag=$(tmux display-message -p -t "$TMUX_PANE" '#{client_utf8}' 2>/dev/null) || return 0
+	[[ $flag != 0 ]]
+}
+
 tmux_restore() {
 	(( TMUX_RESTORE )) || return 0
 	TMUX_RESTORE=0
@@ -2188,6 +2196,7 @@ preview_status() {
 		off) REPLY='off (press i)'; return ;;
 		unsupported) REPLY='no graphics support in this terminal (press i to force)'; return ;;
 		unknown) REPLY='asking the terminal…'; return ;;
+		noutf8) REPLY='tmux is not in UTF-8 mode: attach with "tmux -u", then press i'; return ;;
 	esac
 	if [[ $PV_KIND == error ]]; then
 		REPLY='failed'
@@ -2635,6 +2644,16 @@ images_toggle() {
 		unknown)
 			return 0
 			;;
+		noutf8)
+			if ! tmux_utf8; then
+				status 'tmux is still not in UTF-8 mode: attach with "tmux -u"'
+				return 0
+			fi
+			# The terminal is asked again, since the first answers were not kept.
+			GFX=unknown
+			handshake_send
+			status 'image previews: on'
+			;;
 		*)
 			# A terminal that gave no answer before is asked again.
 			if [[ $GFX == off && $ACK_MODE == unknown ]]; then
@@ -2850,6 +2869,10 @@ main() {
 	now_ms
 	[[ $GFX == off ]] || handshake_send
 	(( HAVE_FFMPEG )) || [[ $GFX == off ]] || status 'ffmpeg is not installed: only PNG files have a preview'
+	if (( IN_TMUX )) && [[ $GFX != off ]] && ! tmux_utf8; then
+		GFX=noutf8
+		status 'tmux is not in UTF-8 mode, so images cannot show: attach with "tmux -u"'
+	fi
 	preview_reset
 	render
 
