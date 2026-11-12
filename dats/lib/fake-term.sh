@@ -41,6 +41,13 @@ sequence() {
 		'[16t'*)
 			[[ -n ${FAKE_MUTE-} ]] || printf '\e[6;20;10t'
 			;;
+		# tmux asks for the device attributes when a client attaches.
+		'[c'*)
+			[[ -n ${FAKE_MUTE-} ]] || printf '\e[?62;22c'
+			;;
+		'[>c'*)
+			[[ -n ${FAKE_MUTE-} ]] || printf '\e[>1;10;0c'
+			;;
 		_G*)
 			ctrl=${line%%;*} payload=
 			[[ $line == *';'* ]] && payload=${line#*;}
@@ -80,7 +87,7 @@ respond() {
 			sequence "$pending"
 			pending=
 		elif (( rc > 128 )); then
-			if [[ $pending == '[5n'* || $pending == '[16t'* ]]; then
+			if [[ $pending == '[5n'* || $pending == '[16t'* || $pending == '[c'* || $pending == '[>c'* ]]; then
 				sequence "$pending"
 				pending=
 			fi

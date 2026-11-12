@@ -13,6 +13,10 @@ shared:
 			done < <(find dats/fixtures/browse -type f -print0)
 			exit "$rc"
 
+# An image with much detail: its preview is too large for the buffers
+# between tmux and a slow terminal.
+setup: ffmpeg -nostdin -v error -f lavfi -i mandelbrot=size=1200x800:rate=1 -frames:v 1 -q:v 3 {shared.detail.jpg}
+
 tests:
 	- desc: every file in the browse fixtures is named by a test
 	  cmd: bash {shared.cover.sh}
@@ -136,6 +140,13 @@ tests:
 			- "the terminal does not answer: no flow control"
 			- "image 2: 586x440 complete"
 			- "images: 2"
+
+	- desc: a terminal that answers nothing gets a whole image on a slow link through tmux
+	  timeout: 150s
+	  cmd: FAKE_MUTE=1 RATE=20000 bash dats/lib/drive.sh {shared.detail.jpg} w:60
+	  outputs:
+		stdout:
+			- "last image: 660x440 complete"
 
 	- desc: the option --no-images sends no graphics at all
 	  timeout: 60s

@@ -63,7 +63,7 @@ source "$root/src/metadata.bash"
 echo '== summary =='
 limit=524288
 [[ $mode == tmux ]] && limit=$(( cols * rows * 4 ))
-images=0 window=0 over=0 queried=no last_key=0 open=0
+images=0 window=0 over=0 queried=no last_key=0 open=0 last=none
 while read -r ms kind detail size; do
 	case $kind in
 		key) last_key=$ms ;;
@@ -81,17 +81,19 @@ while read -r ms kind detail size; do
 				(( images++ ))
 				png=$work/img.$images.png
 				if [[ ${size:-0} != 0 || -s $png ]] && ffmpeg -nostdin -v error -i "$png" -f null - 2>/dev/null && meta_probe "$png"; then
-					echo "image $images: ${META[width]}x${META[height]} complete"
+					last="${META[width]}x${META[height]} complete"
 				elif (( last_key && ms - last_key < 1500 )); then
-					echo "image $images: stopped soon after a key"
+					last='stopped soon after a key'
 				else
-					echo "image $images: stopped, $(( ms - last_key )) ms after the last key"
+					last="damaged or stopped, $(( ms - last_key )) ms after the last key"
 				fi
+				echo "image $images: $last"
 			fi
 			;;
 	esac
 done < "$work/events"
 echo "images: $images"
+echo "last image: $last"
 echo "graphics query: $queried"
 echo "windows over the limit: $over"
 rm -rf -- "$work"

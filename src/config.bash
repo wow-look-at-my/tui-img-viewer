@@ -10,6 +10,7 @@ readonly ESC_WAIT_S=0.05      # longest gap inside one escape sequence
 readonly DEBOUNCE_MS=120      # the selection must rest this long before a job starts
 readonly HANDSHAKE_MS=3000    # wait this long for the terminal to answer the first queries
 readonly ACK_TIMEOUT_MS=4000  # wait this long for one acknowledgement
+readonly RETRY_MS=1000        # pause before an image that tmux dropped goes out again
 readonly STATUS_MS=5000       # a status message stays this long in the footer
 readonly FOCUS_CACHE_MS=300   # ask tmux about the pane focus at most this often
 
@@ -89,5 +90,6 @@ state_init() {
 	RTT_MS=0 LINK_BPS=0 WIN_CAP=$WIN_MAX
 	FOCUS_AT=-100000 FOCUS_OK=0
 	TX_ACTIVE=0 TX_FD=0 TX_ID=0 TX_STARTED=0 TX_EOF=0 TX_WAIT=0 TX_PAUSED=0
-	TX_TOTAL=0 TX_SENT=0 TX_WIN=$WIN_START TX_WIN_SENT=0 TX_WIN_AT=0 TX_PROBE_AT=0 TX_NEED=0
+	TX_TOTAL=0 TX_SENT=0 TX_WIN=$WIN_START
+	TX_BASE=-1 TX_LOST=0 TX_RETRY_AT=0 TX_WIN_SENT=0 TX_WIN_AT=0 TX_PROBE_AT=0 TX_NEED=0
 }

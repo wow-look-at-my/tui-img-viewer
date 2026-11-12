@@ -95,7 +95,7 @@ job_poll() {
 		GOT_GEOM=1
 		box_compute
 	fi
-	if (( GOT_GEOM && ! TX_ACTIVE && STAGE_DONE < STAGES )) && [[ $GFX == on ]]; then
+	if (( GOT_GEOM && ! TX_ACTIVE && STAGE_DONE < STAGES && NOW >= TX_RETRY_AT )) && [[ $GFX == on ]]; then
 		stage_send
 	fi
 	if (( ! JOB_FINISHED )) && [[ -e $dir/done ]]; then
@@ -138,7 +138,11 @@ preview_status() {
 	if (( TX_ACTIVE )); then
 		human_size "$TX_TOTAL"
 		size=$REPLY
-		REPLY="$label ${STAGE_W}×${STAGE_H} · $(( TX_TOTAL ? TX_SENT * 100 / TX_TOTAL : 0 ))% of $size"
+		if [[ $ACK_MODE == on ]]; then
+			REPLY="$label ${STAGE_W}×${STAGE_H} · $(( TX_TOTAL ? TX_SENT * 100 / TX_TOTAL : 0 ))% of $size"
+		else
+			REPLY="$label ${STAGE_W}×${STAGE_H} · sending $size, no flow control"
+		fi
 		(( TX_PAUSED )) && REPLY+=' · paused, pane not focused'
 		return
 	fi

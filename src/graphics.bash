@@ -99,6 +99,23 @@ ack_mode_off() {
 	status "the terminal does not answer: no flow control, sending $REPLY/s (--rate)"
 }
 
+# Sets REPLY to the count of bytes that tmux has queued for its client.
+# tmux counts a byte when it takes it, not when the client reads it.
+tmux_queued() {
+	(( IN_TMUX )) || return 1
+	REPLY=$(tmux display-message -p -t "$TMUX_PANE" '#{client_written}' 2>/dev/null) || return 1
+	[[ $REPLY == +([0-9]) ]]
+}
+
+# tmux drops image data, and reports nothing, while a redraw of the pane
+# waits behind queued output. Succeeds when tmux took less than this image
+# has sent, which shows such a drop.
+tmux_dropped() {
+	(( TX_BASE >= 0 )) || return 1
+	tmux_queued || return 1
+	(( REPLY - TX_BASE < TX_SENT ))
+}
+
 # Adapts the window to the time that the last window needed.
 link_update() {
 	local dt=$1 drain next bps
@@ -140,6 +157,10 @@ tx_begin() {
 		printf '%s' "$DSR"
 		(( PROBES++ ))
 	fi
+	TX_BASE=-1 TX_LOST=0
+	if [[ $ACK_MODE == off ]] && tmux_queued; then
+		TX_BASE=$REPLY
+	fi
 	D_DETAILS=1
 }
 
@@ -171,8 +192,15 @@ tx_window_released() {
 		fi
 	elif (( (NOW - TX_WIN_AT) * RATE_BPS < TX_WIN_SENT * 1000 )); then
 		return 1
+	elif tmux_dropped; then
+		# tmux can be a moment behind, so the verdict waits a little.
+		(( NOW - TX_PROBE_AT > 500 )) && TX_LOST=1
+		return 1
 	fi
-	TX_WAIT=0 TX_WIN_SENT=0 D_DETAILS=1
+	TX_WAIT=0 TX_WIN_SENT=0
+	# Fixed-rate mode counts the bytes of tmux, so it must not add screen
+	# updates of its own between two windows.
+	[[ $ACK_MODE == on ]] && D_DETAILS=1
 	return 0
 }
 
@@ -180,7 +208,14 @@ tx_window_released() {
 tx_pump() {
 	(( TX_ACTIVE )) || return 0
 	if (( TX_WAIT )); then
-		tx_window_released || return 0
+		if ! tx_window_released; then
+			(( TX_LOST )) || return 0
+			# The stage stays open, so the pipeline sends it again.
+			tx_abort
+			TX_RETRY_AT=$(( NOW + RETRY_MS ))
+			status 'tmux dropped image data during a redraw: sending the image again'
+			return 0
+		fi
 	fi
 	if (( TX_EOF )); then
 		tx_done

@@ -58,6 +58,7 @@ Image details come from a parser in the script itself. It reads PNG, JPEG, GIF, 
 - The image goes out in small windows. After each window the terminal answers a short question, so the program knows what the link can carry and adapts the window size.
 - A key press stops a transfer at once. A small draft arrives first, and the full preview replaces it when you stay on the file.
 - `+` and `-` change the preview quality, which is the number of bytes on the link.
+- A terminal that answers nothing gets a fixed send rate (`--rate`). The program then checks that tmux took every byte, and sends an image again when tmux dropped part of it.
 
 In tmux, the program turns on `allow-passthrough` for its own pane and restores it on exit.
 
