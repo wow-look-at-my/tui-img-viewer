@@ -56,7 +56,7 @@ tests:
 	  cmd: grep -c '^# bashfs. begin ' imgv; grep -c 'bashfs_' imgv; grep -c 'base64 -d' imgv; true
 	  outputs:
 		stdout:
-			0: '^12$'
+			0: '^13$'
 			1: '^0$'
 			2: '^0$'
 

@@ -50,7 +50,19 @@ Press `?` in the program for the keys.
 - `ffmpeg` on the remote host, to decode and shrink images. Without it, only PNG files have a preview.
 - `file` is optional. It names the type of a file that is not an image.
 
-Image details come from a parser in the script itself. It reads PNG, JPEG, GIF, BMP, WebP and TIFF headers, and the EXIF camera data.
+Image details come from a parser in the script itself. It reads PNG, JPEG, GIF, BMP, WebP, TIFF, OpenEXR and Radiance HDR headers, and the EXIF camera data.
+
+## Formats
+
+| Format | Preview | Notes |
+|---|---|---|
+| PNG | yes | a small file goes to the terminal as it is |
+| JPEG, WebP, GIF, BMP, TIFF | yes | ffmpeg decodes, EXIF rotation is applied |
+| OpenEXR (`.exr`) | yes | ffmpeg decodes, linear light is shown with the sRGB curve |
+| Radiance (`.hdr`) | yes | a bash decoder expands the data when ffmpeg is too old to read the format |
+| AVIF, HEIC, JPEG XL and others | when the installed ffmpeg reads them | details come from ffprobe |
+
+Bright areas of an EXR or HDR picture clip at white. The decoder for `.hdr` is slow on a large file, and its result is kept for the session.
 
 ## How it stays responsive
 

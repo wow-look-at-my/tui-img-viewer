@@ -68,10 +68,8 @@ radiance_planes() {
 	local fast=1
 	(( ${#rows[@]} == height + 1 )) && [[ -z ${rows[0]} ]] || fast=0
 
-	local -a fd
-	for ch in 0 1 2 3; do
-		exec {fd[ch]}> "$out.$ch" || return 1
-	done
+	# Each plane collects its lines as hex text.
+	local -a plane=('' '' '' '')
 	if (( fast )); then
 		for (( i = 0; i < height; i += step )); do
 			RAD_HEX=${rows[i + 1]} RAD_POS=0
@@ -81,16 +79,14 @@ radiance_planes() {
 				break
 			fi
 			for ch in 0 1 2 3; do
-				printf '%b' "${RAD_LINE[ch]// /\\x}" >&"${fd[ch]}"
+				plane[ch]+=${RAD_LINE[ch]}
 			done
 			(( RAD_ROWS++ ))
 		done
 	fi
 	if (( ! fast )); then
 		# The slow way: walk every scan line in order.
-		for ch in 0 1 2 3; do
-			exec {fd[ch]}> "$out.$ch"
-		done
+		plane=('' '' '' '')
 		RAD_HEX=$hex RAD_POS=0 RAD_ROWS=0
 		for (( i = 0; i < height; i++ )); do
 			[[ ${RAD_HEX:RAD_POS * 3:12} == "$marker" ]] || return 1
@@ -101,18 +97,16 @@ radiance_planes() {
 			fi
 			radiance_row "$width" 1 || return 1
 			for ch in 0 1 2 3; do
-				printf '%b' "${RAD_LINE[ch]// /\\x}" >&"${fd[ch]}"
+				plane[ch]+=${RAD_LINE[ch]}
 			done
 			(( RAD_ROWS++ ))
 		done
 	fi
-	for ch in 0 1 2 3; do
-		exec {fd[ch]}>&-
-	done
+	(( RAD_ROWS > 0 )) || return 1
 	# The plane order of the pixel format: green, blue, red, then the exponent.
-	cat -- "$out.1" "$out.2" "$out.0" "$out.3" > "$out" || return 1
-	rm -f -- "$out.0" "$out.1" "$out.2" "$out.3"
-	(( RAD_ROWS > 0 ))
+	for ch in 1 2 0 3; do
+		printf '%b' "${plane[ch]// /\\x}"
+	done > "$out"
 }
 
 # Sets REPLY to the ffmpeg filter that turns the planes into display colors:

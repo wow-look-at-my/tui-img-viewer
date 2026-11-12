@@ -34,7 +34,7 @@ tests:
 			- "Type     directory"
 			- "Items    1, images: 1"
 			- "inner.png"
-			- "1/9  name  normal"
+			- "1/11  name  normal"
 			- "? help  q quit"
 			- "images: 0"
 		!stdout:
@@ -111,6 +111,28 @@ tests:
 			- "image 1: 64x64 complete"
 			- "images: 1"
 
+	- desc: an OpenEXR picture shows its details and a preview
+	  timeout: 60s
+	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:1 k:/ k:scene.exr $'k:\r' w:4 shot:exr
+	  outputs:
+		stdout:
+			- "Name     scene.exr"
+			- "Type     EXR · RGB 16-bit · ZIP, half"
+			- "Image    320×240"
+			- "image 1: 320x240 complete"
+			- "images: 1"
+
+	- desc: a Radiance HDR picture shows its details and a preview
+	  timeout: 60s
+	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:1 k:/ k:scene.hdr $'k:\r' w:5 shot:hdr
+	  outputs:
+		stdout:
+			- "Name     scene.hdr"
+			- "Type     HDR · RGB · RGBE"
+			- "Image    320×240"
+			- "image 1: 320x240 complete"
+			- "images: 1"
+
 	- desc: a tall image keeps its shape
 	  timeout: 60s
 	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:G w:3 shot:tall
@@ -160,7 +182,7 @@ tests:
 
 	- desc: a text file shows its first lines
 	  timeout: 60s
-	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:1 k:jjjjjj w:1.5 shot:text
+	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:1 k:/ k:settings $'k:\r' w:1.5 shot:text
 	  outputs:
 		stdout:
 			- "Name     settings.conf"
@@ -214,7 +236,7 @@ tests:
 	  outputs:
 		stdout:
 			- "Name     tall.webp"
-			- "9/9  name  normal"
+			- "11/11  name  normal"
 
 	- desc: the dot key shows hidden files and the s key changes the sort order
 	  timeout: 60s
@@ -222,7 +244,7 @@ tests:
 	  outputs:
 		stdout:
 			- ".hidden-note.txt"
-			- "/10  time  normal"
+			- "/12  time  normal"
 
 	- desc: a directory opens and the parent comes back with the same selection
 	  timeout: 60s
@@ -232,7 +254,7 @@ tests:
 			- "Name     inner.png"
 			- "1/1  name  normal"
 			- "Name     sub"
-			- "1/9  name  normal"
+			- "1/11  name  normal"
 
 	- desc: the help key lists the keys, and the next key closes the list
 	  timeout: 60s
