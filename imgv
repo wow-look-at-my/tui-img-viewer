@@ -1904,6 +1904,9 @@ link_update() {
 	(( dt < 1 )) && dt=1
 	(( RTT_MS == 0 || dt < RTT_MS )) && RTT_MS=$dt
 	bps=$(( TX_WIN_SENT * 1000 / dt ))
+	# A small window can pass in one burst of the link. One sample
+	# therefore counts as the double of the estimate at most.
+	(( LINK_BPS && bps > LINK_BPS * 2 )) && bps=$(( LINK_BPS * 2 ))
 	LINK_BPS=$(( LINK_BPS ? (LINK_BPS * 3 + bps) / 4 : bps ))
 	# A short last window says little about the link.
 	(( TX_WIN_SENT * 2 < TX_WIN )) && return 0

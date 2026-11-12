@@ -50,6 +50,13 @@ Press `?` in the program for the keys.
 - `ffmpeg` on the remote host, to decode and shrink images. Without it, only PNG files have a preview.
 - `file` is optional. It names the type of a file that is not an image.
 
+Over ssh, Ubuntu 22.04 does not know the terminal name of Ghostty, and tmux stops with `missing or unsuitable terminal: xterm-ghostty`. This is a tmux matter, not one of `imgv`. Copy the entry to the remote host one time, or connect with a name it knows:
+
+```bash
+infocmp -x xterm-ghostty | ssh remote -- tic -x -
+TERM=xterm-256color ssh remote
+```
+
 Image details come from a parser in the script itself. It reads PNG, JPEG, GIF, BMP, WebP, TIFF, OpenEXR and Radiance HDR headers, and the EXIF camera data.
 
 ## Formats
