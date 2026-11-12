@@ -18,7 +18,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: wow-look-at-my/actions@bubblewrap#latest
-      - run: sudo apt-get install -y tmux ffmpeg shellcheck
+      # The runner image's apt index goes stale, and a bare `apt-get install` then answers "Unable to locate package". cached-apt refreshes the index first, drops an apt mirror that has stopped answering. Keeps the files it installed in the cache for the next run.
+      - uses: wow-look-at-my/actions@cached-apt#latest
+        with:
+          packages: tmux ffmpeg shellcheck
       - run: curl -fsSL https://apt.pazer.build/dats/install.sh | sudo sh
       - run: curl -fsSL https://apt.pazer.build/bashfs/install.sh | sudo sh
       - run: sudo apt-get install -y dats bashfs
