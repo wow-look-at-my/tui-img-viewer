@@ -7,9 +7,6 @@ out=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/meta
 mkdir -p "$out"
 rm -f "$out"/*
 
-im() {
-	convert "$@"
-}
 src=(-size 40x30 gradient:red-blue)
 alphasrc=(-size 40x30 gradient:red-blue -alpha set -channel A -fx 'i/w' +channel)
 # Without these, PNG output carries the current time and is not deterministic.
@@ -86,21 +83,24 @@ ifd() {
 }
 
 # tiffblock "IFD0 ENTRY"... -- "EXIF ENTRY"... prints a TIFF header, IFD0 with an
-# Exif pointer (tag 0x8769) and the Exif sub-IFD.
+# Exif pointer (tag 0x8769) and the Exif sub-IFD. Hex in $pix goes right after
+# the header, so pixel data sits at offset.
+pix=""
 tiffblock() {
 	local -a ifd0=() exif=()
-	local hdr ifd0hex exifoff
+	local hdr ifd0hex exifoff start=$((8 + ${#pix} / 2))
 	while (($# > 0)) && [[ $1 != -- ]]; do
 		ifd0+=("$1")
 		shift
 	done
 	shift
 	exif=("$@")
-	if [[ $order == II ]]; then hdr=49492a0008000000; else hdr=4d4d002a00000008; fi
-	ifd0hex=$(ifd 8 "${ifd0[@]}" "34665 4 1 $(h32 0)")
-	exifoff=$((8 + ${#ifd0hex} / 2))
-	ifd0hex=$(ifd 8 "${ifd0[@]}" "34665 4 1 $(h32 "$exifoff")")
-	printf '%s%s%s' "$hdr" "$ifd0hex" "$(ifd "$exifoff" "${exif[@]}")"
+	if [[ $order == II ]]; then hdr=49492a00; else hdr=4d4d002a; fi
+	hdr+=$(h32 "$start")
+	ifd0hex=$(ifd "$start" "${ifd0[@]}" "34665 4 1 $(h32 0)")
+	exifoff=$((start + ${#ifd0hex} / 2))
+	ifd0hex=$(ifd "$start" "${ifd0[@]}" "34665 4 1 $(h32 "$exifoff")")
+	printf '%s%s%s%s' "$hdr" "$pix" "$ifd0hex" "$(ifd "$exifoff" "${exif[@]}")"
 }
 
 # CRC-32 (IEEE) of hex text, for PNG chunks.
@@ -125,15 +125,15 @@ insert_after() {
 }
 
 # --- PNG ---
-im "${src[@]}" "${nodate[@]}" PNG24:"$out/png-rgb.png"
-im "${alphasrc[@]}" "${nodate[@]}" PNG32:"$out/png-rgba.png"
-im -size 40x30 gradient:black-white -colorspace Gray -depth 16 "${nodate[@]}" \
+convert "${src[@]}" "${nodate[@]}" PNG24:"$out/png-rgb.png"
+convert "${alphasrc[@]}" "${nodate[@]}" PNG32:"$out/png-rgba.png"
+convert -size 40x30 gradient:black-white -colorspace Gray -depth 16 "${nodate[@]}" \
 	-define png:color-type=0 -define png:bit-depth=16 PNG:"$out/png-gray16.png"
-im "${src[@]}" -colors 16 "${nodate[@]}" PNG8:"$out/png-palette.png"
-im "${src[@]}" -interlace PNG "${nodate[@]}" PNG24:"$out/png-interlaced.png"
+convert "${src[@]}" -colors 16 "${nodate[@]}" PNG8:"$out/png-palette.png"
+convert "${src[@]}" -interlace PNG "${nodate[@]}" PNG24:"$out/png-interlaced.png"
 # PNG8 keeps binary transparency as a tRNS chunk next to the palette.
-im "${src[@]}" -colors 8 -fill none -draw 'rectangle 0,0 9,9' "${nodate[@]}" PNG8:"$out/png-trns.png"
-im -delay 10 "${src[@]}" -size 40x30 gradient:blue-red -loop 0 "${nodate[@]}" APNG:"$out/png-animated.png"
+convert "${src[@]}" -colors 8 -fill none -draw 'rectangle 0,0 9,9' "${nodate[@]}" PNG8:"$out/png-trns.png"
+convert -delay 10 "${src[@]}" -size 40x30 gradient:blue-red -loop 0 "${nodate[@]}" APNG:"$out/png-animated.png"
 order=MM
 exifhex=$(tiffblock "272 2 8 $(asc 'PNG Cam')" "274 3 1 $(h16 8)" -- "34855 3 1 $(h16 100)")
 chunk=$(be32 $((${#exifhex} / 2)))65584966$exifhex
@@ -141,9 +141,9 @@ chunk+=$(crc32 "65584966$exifhex")
 insert_after "$out/png-rgb.png" 33 "$chunk" "$out/png-exif.png"
 
 # --- JPEG ---
-im "${src[@]}" -strip -quality 80 JPEG:"$out/jpeg-baseline.jpg"
-im "${src[@]}" -strip -quality 80 -interlace JPEG JPEG:"$out/jpeg-progressive.jpg"
-im "${src[@]}" -strip -colorspace Gray -type Grayscale -quality 80 JPEG:"$out/jpeg-gray.jpg"
+convert "${src[@]}" -strip -quality 80 JPEG:"$out/jpeg-baseline.jpg"
+convert "${src[@]}" -strip -quality 80 -interlace JPEG JPEG:"$out/jpeg-progressive.jpg"
+convert "${src[@]}" -strip -colorspace Gray -type Grayscale -quality 80 JPEG:"$out/jpeg-gray.jpg"
 
 order=II
 exifhex=$(tiffblock \
@@ -190,19 +190,19 @@ filler+='\xff'
 } >"$out/jpeg-big-app2.jpg"
 
 # --- GIF, BMP ---
-im "${src[@]}" -colors 16 GIF:"$out/gif89a.gif"
-im "${src[@]}" -colors 4 GIF87:"$out/gif87a.gif"
-im "${src[@]}" -type TrueColor BMP3:"$out/bmp-24.bmp"
-im "${alphasrc[@]}" -define bmp:format=bmp4 BMP:"$out/bmp-32-topdown.bmp"
+convert "${src[@]}" -colors 16 GIF:"$out/gif89a.gif"
+convert "${src[@]}" -colors 4 GIF87:"$out/gif87a.gif"
+convert "${src[@]}" -type TrueColor BMP3:"$out/bmp-24.bmp"
+convert "${alphasrc[@]}" -define bmp:format=bmp4 BMP:"$out/bmp-32-topdown.bmp"
 # IM writes bottom-up rows only; a negative height (a later offset) marks top-down.
 printf '\xe2\xff\xff\xff' | dd of="$out/bmp-32-topdown.bmp" bs=1 seek=22 conv=notrunc status=none
-im "${src[@]}" -colors 16 -type Palette BMP2:"$out/bmp-core.bmp"
+convert "${src[@]}" -colors 16 -type Palette BMP2:"$out/bmp-core.bmp"
 
 # --- WebP ---
-im "${src[@]}" -quality 80 WEBP:"$out/webp-lossy.webp"
-im "${alphasrc[@]}" -define webp:lossless=true WEBP:"$out/webp-lossless-alpha.webp"
-im "${alphasrc[@]}" -quality 80 WEBP:"$out/webp-vp8x-alpha.webp"
-im -delay 10 "${src[@]}" -size 40x30 gradient:blue-red -loop 0 WEBP:"$out/webp-animated.webp"
+convert "${src[@]}" -quality 80 WEBP:"$out/webp-lossy.webp"
+convert "${alphasrc[@]}" -define webp:lossless=true WEBP:"$out/webp-lossless-alpha.webp"
+convert "${alphasrc[@]}" -quality 80 WEBP:"$out/webp-vp8x-alpha.webp"
+convert -delay 10 "${src[@]}" -size 40x30 gradient:blue-red -loop 0 WEBP:"$out/webp-animated.webp"
 
 # VP8X around the lossless bitstream plus an EXIF chunk (flags: EXIF 0x08, alpha 0x10).
 order=II
@@ -214,9 +214,32 @@ body+=45584946$(le32 $((${#exifhex} / 2)))$exifhex
 hexbin "52494646$(le32 $((${#body} / 2)))$body" >"$out/webp-vp8x-exif.webp"
 
 # --- TIFF ---
-im "${src[@]}" -strip -compress LZW TIFF:"$out/tiff-le.tif"
-im "${alphasrc[@]}" -strip -endian MSB -compress None TIFF:"$out/tiff-be-rgba.tif"
-im -size 40x30 gradient:black-white -strip -colorspace Gray -depth 8 -compress Zip TIFF:"$out/tiff-gray-zip.tif"
+convert "${src[@]}" -strip -depth 8 -compress LZW TIFF:"$out/tiff-le.tif"
+convert "${alphasrc[@]}" -strip -depth 8 -endian MSB -compress None TIFF:"$out/tiff-be-rgba.tif"
+convert -size 40x30 gradient:black-white -strip -colorspace Gray -depth 8 -compress Zip TIFF:"$out/tiff-gray-zip.tif"
+
+# ImageMagick drops EXIF when it writes TIFF, so this one is built by hand. 4x3
+# RGB, uncompressed, one strip, with EXIF tags in IFD0 and the Exif sub-IFD.
+order=MM
+pix=$(printf '%02x' {1..36})
+tiffhex=$(tiffblock \
+	"256 3 1 $(h16 4)" \
+	"257 3 1 $(h16 3)" \
+	"258 3 3 $(h16 8)$(h16 8)$(h16 8)" \
+	"259 3 1 $(h16 1)" \
+	"262 3 1 $(h16 2)" \
+	"271 2 9 $(asc TiffMake)" \
+	"273 4 1 $(h32 8)" \
+	"274 3 1 $(h16 2)" \
+	"277 3 1 $(h16 3)" \
+	"278 3 1 $(h16 3)" \
+	"279 4 1 $(h32 36)" \
+	"306 2 20 $(asc '2020:01:01 00:00:00')" \
+	-- \
+	"34855 3 1 $(h16 800)" \
+	"36867 2 20 $(asc '2021:06:15 12:30:45')")
+pix=""
+hexbin "$tiffhex" >"$out/tiff-exif-be.tif"
 
 # --- Negative cases ---
 : >"$out/bad-empty.bin"
