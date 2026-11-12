@@ -74,11 +74,15 @@ while read -r ms kind detail size; do
 		gfx)
 			(( window += ${size:-0} ))
 			[[ $detail == *a=q* ]] && queried=yes
-			[[ $detail == *a=T* ]] && open=1
+			if [[ $detail == *a=T* ]]; then
+				# The end of the image before never came: tmux dropped it.
+				(( open )) && echo "image $images: lost on the way"
+				(( images++ ))
+				open=1
+			fi
 			# An empty last chunk closes a transfer that the program stopped.
 			if (( open )) && [[ $detail == *m=0* ]]; then
 				open=0
-				(( images++ ))
 				png=$work/img.$images.png
 				if [[ ${size:-0} != 0 || -s $png ]] && ffmpeg -nostdin -v error -i "$png" -f null - 2>/dev/null && meta_probe "$png"; then
 					last="${META[width]}x${META[height]} complete"
