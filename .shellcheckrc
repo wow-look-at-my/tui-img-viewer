@@ -1,0 +1,3 @@
+# The pieces in src/ share their globals, and shellcheck reads one piece at a
+# time. The test suite checks the joined script with every rule on.
+disable=SC2034

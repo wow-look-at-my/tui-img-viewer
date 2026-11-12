@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+
+concurrency:
+  group: gha_${{ github.repository }}_${{ github.workflow }}_${{ github.ref != 'refs/heads/master' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  test:
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: wow-look-at-my/actions@bubblewrap#latest
+      # Not cached-apt: ffmpeg loads a library that apt sets up as an alternative, and a cache restore does not make that link.
+      - run: sudo apt-get update && sudo apt-get install -y tmux ffmpeg shellcheck
+      - uses: wow-look-at-my/actions@secret-server#latest
+      # bashfs is a private package. The authenticated apt source lists it and dats.
+      - name: Install dats and bashfs
+        shell: bash
+        run: |
+          if [[ -z ${BUILDHOST_READ_TOKEN-} ]]; then
+            echo "::error::secret-server gave no BUILDHOST_READ_TOKEN, and the bashfs package needs one"
+            exit 1
+          fi
+          curl -fsSL -H "Authorization: Bearer $BUILDHOST_READ_TOKEN" https://apt.pazer.build/bashfs/install.sh \
+            | sudo BUILDHOST_TOKEN="$BUILDHOST_READ_TOKEN" sh
+          sudo apt-get install -y dats bashfs
+      - run: dats dats/
