@@ -194,12 +194,13 @@ tx_pump() {
 	(( TX_PAUSED )) && D_DETAILS=1
 	TX_PAUSED=0
 
-	local budget=$(( TX_WIN - TX_WIN_SENT )) burst=$BURST chunk ctrl more out='' n
+	local burst=$BURST chunk ctrl more out='' n
 	if (( TX_WIN_SENT == 0 )); then
 		now_ms
 		TX_WIN_AT=$NOW
 	fi
-	while (( budget > 0 && burst > 0 && ! TX_EOF )); do
+	# A window holds whole chunks and never more bytes than TX_WIN.
+	while (( burst > 0 && ! TX_EOF && (TX_WIN_SENT == 0 || TX_WIN_SENT + CHUNK <= TX_WIN) )); do
 		IFS= read -r -N "$CHUNK" -u "$TX_FD" chunk || TX_EOF=1
 		more=$(( ! TX_EOF ))
 		if (( TX_STARTED )); then
@@ -210,9 +211,9 @@ tx_pump() {
 		fi
 		out+="$GFX_PRE$ctrl;$chunk$GFX_SUF"
 		n=${#chunk}
-		(( budget -= n, burst -= n, TX_SENT += n, TX_WIN_SENT += n ))
+		(( burst -= n, TX_SENT += n, TX_WIN_SENT += n ))
 	done
-	if (( TX_EOF || budget <= 0 )); then
+	if (( TX_EOF || TX_WIN_SENT + CHUNK > TX_WIN )); then
 		if [[ $ACK_MODE == on ]]; then
 			out+=$DSR
 			(( PROBES++ ))

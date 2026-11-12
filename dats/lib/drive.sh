@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# Runs imgv on the fake terminal, plays a list of steps, and prints the facts that a test asserts on.
+set -o nounset
+
+here=$(cd "${BASH_SOURCE%/*}" && pwd)
+root=$(cd "$here/../.." && pwd)
+target=$1
+shift
+mode=${MODE:-tmux} rate=${RATE:-0} cols=${COLS:-120} rows=${ROWS:-36}
+
+work=$(mktemp -d)
+export TMUX_TMPDIR=$work
+unset TMUX TMUX_PANE
+socket=imgv-test
+
+printf -v command 'LC_ALL=C.UTF-8 TERM=xterm-256color %q %s %q' "$root/imgv" "${IMGV_ARGS-}" "$target"
+if [[ $mode == tmux ]]; then
+	printf -v command 'TERM=xterm-256color tmux -L %s -f /dev/null new-session %q' "$socket" "$command"
+fi
+
+now() {
+	local t=${EPOCHREALTIME/[.,]/}
+	REPLY=$(( t / 1000 ))
+}
+
+# Prints the tmux pane as text. A placeholder cell of an image shows as "#".
+screen() {
+	printf '== screen %s ==\n' "$1"
+	tmux -L "$socket" capture-pane -p |
+		LC_ALL=C sed -e 's/\xf4\x8e\xbb\xae[\x80-\xf3]*/#/g' -e 's/ *$//'
+}
+
+bash "$here/fake-term.sh" "$work" "$rate" "$cols" "$rows" "$command" &
+terminal=$!
+while [[ ! -p $work/in ]]; do
+	sleep 0.05
+done
+exec 9> "$work/in"
+for step in "$@"; do
+	case $step in
+		k:*)
+			now
+			printf '%s key\n' "$REPLY" >> "$work/events"
+			printf '%s' "${step#k:}" >&9
+			;;
+		w:*) sleep "${step#w:}" ;;
+		shot:*) screen "${step#shot:}" ;;
+		*)
+			echo "drive.sh: unknown step: $step" >&2
+			exit 2
+			;;
+	esac
+done
+printf 'q' >&9
+exec 9>&-
+wait "$terminal"
+[[ $mode == tmux ]] && tmux -L "$socket" kill-server 2>/dev/null
+
+# The summary. Every line is a fact with no timing in it, so a test can
+# assert the exact text.
+# shellcheck source=/dev/null
+source "$root/src/metadata.bash"
+echo '== summary =='
+limit=524288
+[[ $mode == tmux ]] && limit=$(( cols * rows * 4 ))
+images=0 window=0 over=0 queried=no last_key=0 open=0
+while read -r ms kind detail size; do
+	case $kind in
+		key) last_key=$ms ;;
+		probe)
+			(( window > limit )) && (( over++ ))
+			window=0
+			;;
+		gfx)
+			(( window += ${size:-0} ))
+			[[ $detail == *a=q* ]] && queried=yes
+			[[ $detail == *a=T* ]] && open=1
+			# An empty last chunk closes a transfer that the program stopped.
+			if (( open )) && [[ $detail == *m=0* ]]; then
+				open=0
+				(( images++ ))
+				png=$work/img.$images.png
+				if [[ ${size:-0} != 0 || -s $png ]] && ffmpeg -nostdin -v error -i "$png" -f null - 2>/dev/null && meta_probe "$png"; then
+					echo "image $images: ${META[width]}x${META[height]} complete"
+				elif (( last_key && ms - last_key < 1500 )); then
+					echo "image $images: stopped soon after a key"
+				else
+					echo "image $images: stopped, $(( ms - last_key )) ms after the last key"
+				fi
+			fi
+			;;
+	esac
+done < "$work/events"
+echo "images: $images"
+echo "graphics query: $queried"
+echo "windows over the limit: $over"
+rm -rf -- "$work"

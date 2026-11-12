@@ -1,0 +1,2454 @@
+#!/usr/bin/env bash
+# imgv - a terminal file browser. Its main job is image previews on a slow
+# link.
+set -o nounset
+shopt -s extglob
+
+# bashfs: begin config.bash
+# Constants and the mutable state of the program.
+
+readonly VERSION=0.1.0
+readonly PROG=imgv
+
+# Timing. Names that end in _S hold seconds, names that end in _MS hold milliseconds.
+readonly TICK_IDLE_S=0.25     # loop period when nothing is pending
+readonly TICK_BUSY_S=0.02     # loop period while a job or a timer is pending
+readonly ESC_WAIT_S=0.05      # longest gap inside one escape sequence
+readonly DEBOUNCE_MS=120      # the selection must rest this long before a job starts
+readonly HANDSHAKE_MS=3000    # wait this long for the terminal to answer the first queries
+readonly ACK_TIMEOUT_MS=4000  # wait this long for one acknowledgement
+readonly STATUS_MS=5000       # a status message stays this long in the footer
+readonly FOCUS_CACHE_MS=300   # ask tmux about the pane focus at most this often
+
+# Transfer of image data.
+readonly CHUNK=4096           # protocol limit: base64 characters in one graphics command
+readonly BURST=65536          # bytes written between looks at the keyboard
+readonly WIN_START=16384      # first window size
+readonly WIN_MIN=4096
+readonly WIN_MAX=524288
+readonly WIN_TARGET_MS=250    # one window must drain in about this time
+
+# Rendering.
+readonly THUMB_EDGE=256                        # long edge of the draft stage, in pixels
+readonly -a QUALITY_EDGE=(0 384 768 1280 0)
+readonly -a QUALITY_NAME=('' draft normal fine full)
+readonly DIRECT_PNG_MAX=196608   # a PNG file below this size goes to the terminal.
+readonly MAX_UPSCALE=4           # a small image grows by this factor at most
+readonly CACHE_MAX=48            # finished preview jobs kept for the session
+readonly TEXT_LINES=200          # lines of a text or directory preview
+readonly WIDE_MIN_COLS=72        # below this width the panes stack
+readonly DETAIL_ROWS=8
+
+# Styles. Only attributes and the base colors, so the terminal theme decides the look.
+readonly S_RESET=$'\e[0m'
+readonly S_BOLD=$'\e[1m'
+readonly S_DIM=$'\e[2m'
+readonly S_SEL=$'\e[7m'
+readonly S_BAR=$'\e[7m'
+readonly S_DIR=$'\e[1;34m'
+readonly S_LINK=$'\e[36m'
+readonly S_ERR=$'\e[31m'
+
+# Sets every global that the program changes while it runs.
+state_init() {
+	RUNNING=1 MODE=normal NOW=0
+	FRAME=
+	STATUS='' STATUS_AT=0
+	RUN_DIR='' TERM_READY=0 STTY_SAVED='' TMUX_RESTORE=0 IN_TMUX=0
+	HAVE_FFMPEG=0 HAVE_FFPROBE=0 HAVE_FILE=0
+
+	# Options.
+	QUALITY=2 SHOW_HIDDEN=0 SORT=name RATE_BPS=131072 START_PATH=.
+
+	# Screen geometry, in cells. L = list, P = preview, D = details.
+	ROWS=24 COLS=80 TOO_SMALL=0 ZOOM=0 RESIZED=0
+	L_X=1 L_Y=2 L_W=0 L_H=0 P_X=1 P_Y=2 P_W=0 P_H=0 D_X=1 D_Y=2 D_W=0 D_H=0
+	SEP_COL=0 SEP_ROW=0
+	CELL_W=10 CELL_H=20 CELL_KNOWN=0 CELL_WAIT_UNTIL=0
+
+	# What must be drawn again.
+	D_ALL=1 D_HEADER=0 D_LIST=0 D_DETAILS=0 D_PREVIEW=0 D_FOOTER=0
+	DIRTY_ROWS=()
+
+	# Directory listing.
+	N=0 CUR=0 TOP=0
+	E_NAME=() E_KIND=() E_LINK=() E_SIZE=() E_MTIME=() E_IMG=()
+	declare -gA DIR_SEL=()
+	SEARCH='' SEARCH_FROM=0
+
+	# Preview pipeline.
+	PENDING=0 PENDING_AT=0
+	JOB_DIR='' JOB_PID=0 JOB_KEY='' JOB_FINISHED=0 JOB_SEQ=0
+	GOT_INFO=0 GOT_TEXT=0 GOT_ERR=0 GOT_GEOM=0
+	JOB_INFO=() DET=()
+	PV_KIND=none PV_MSG='' PV_TEXT=() PV_PAINTED=''
+	IMG_W=0 IMG_H=0 STAGES=0 STAGE_DONE=0 TX_STAGE=0 STAGE_W=0 STAGE_H=0 STAGE_BYTES=0
+	BOX_X=0 BOX_Y=0 BOX_C=0 BOX_R=0
+	declare -gA CACHE=()
+	CACHE_ORDER=()
+
+	# Graphics and link state.
+	GFX=unknown ACK_MODE=unknown
+	GFX_PRE='' GFX_SUF='' DSR='' PH='' DIA=() ID_A=0 ID_B=0
+	SHOWN_ID=0 SHOWN_PH='' OLD_ID=0
+	HS_PENDING=0 HS_NEED=0 HS_AT=0
+	PROBES=0 ACKS=0 ACK_SEEN=0 ACK_MISSES=0
+	RTT_MS=0 LINK_BPS=0 WIN_CAP=$WIN_MAX
+	FOCUS_AT=-100000 FOCUS_OK=0
+	TX_ACTIVE=0 TX_FD=0 TX_ID=0 TX_STARTED=0 TX_EOF=0 TX_WAIT=0 TX_PAUSED=0
+	TX_TOTAL=0 TX_SENT=0 TX_WIN=$WIN_START TX_WIN_SENT=0 TX_WIN_AT=0 TX_PROBE_AT=0 TX_NEED=0
+}
+# bashfs: end config.bash
+# bashfs: begin util.bash
+# Small helpers with no terminal or file-system state.
+
+die() {
+	printf '%s: %s\n' "$PROG" "$*" >&2
+	exit 1
+}
+
+# Sets NOW to the wall clock in milliseconds. It does not fork.
+now_ms() {
+	local t=$EPOCHREALTIME
+	NOW=$(( ${t%[.,]*} * 1000 + 10#${t#*[.,]} / 1000 ))
+}
+
+# Shows a message in the footer for a short time.
+status() {
+	STATUS=$1 STATUS_AT=$NOW D_FOOTER=1
+}
+
+# Sets REPLY to a byte count in a short form, for example "3.4 MiB".
+human_size() {
+	local n=$1 unit
+	if (( n < 1024 )); then
+		REPLY="$n B"
+		return
+	fi
+	for unit in KiB MiB GiB TiB; do
+		if (( n < 1048576 )) || [[ $unit == TiB ]]; then
+			REPLY="$(( n / 1024 )).$(( n % 1024 * 10 / 1024 )) $unit"
+			return
+		fi
+		(( n /= 1024 ))
+	done
+}
+
+# Succeeds when the file name $1 has the extension of an image format.
+is_image() {
+	case ${1,,} in
+		*.png | *.jpg | *.jpeg | *.jpe | *.jfif | *.gif | *.webp | *.bmp | *.tif | *.tiff) return 0 ;;
+		*.avif | *.heic | *.heif | *.jxl | *.ico | *.tga | *.ppm | *.pgm | *.pbm | *.pnm | *.qoi | *.svg) return 0 ;;
+	esac
+	return 1
+}
+
+# Sets REPLY to the cell width of the code point in $1.
+char_width() {
+	local cp=$1
+	REPLY=1
+	(( cp < 0x300 )) && return
+	if (( (cp >= 0x300 && cp <= 0x36F) || (cp >= 0x1AB0 && cp <= 0x1AFF) ||
+		(cp >= 0x200B && cp <= 0x200F) || (cp >= 0x20D0 && cp <= 0x20FF) ||
+		(cp >= 0xFE00 && cp <= 0xFE0F) )); then
+		REPLY=0
+	elif (( (cp >= 0x1100 && cp <= 0x115F) || (cp >= 0x2E80 && cp <= 0xA4CF) ||
+		(cp >= 0xAC00 && cp <= 0xD7A3) || (cp >= 0xF900 && cp <= 0xFAFF) ||
+		(cp >= 0xFE30 && cp <= 0xFE6F) || (cp >= 0xFF00 && cp <= 0xFF60) ||
+		(cp >= 0xFFE0 && cp <= 0xFFE6) || (cp >= 0x1F300 && cp <= 0x1FAFF) ||
+		(cp >= 0x20000 && cp <= 0x3FFFD) )); then
+		REPLY=2
+	fi
+}
+
+# Sets REPLY to $1 cut or padded to exactly $2 cells. A cut ends in an ellipsis.
+fit() {
+	local s=${1//[[:cntrl:]]/?} w=$2
+	if (( w <= 0 )); then
+		REPLY=
+		return
+	fi
+	local n=${#s}
+	if [[ $s != *[!\ -~]* ]]; then
+		if (( n > w )); then
+			REPLY="${s:0:w-1}…"
+		else
+			printf -v REPLY '%-*s' "$w" "$s"
+		fi
+		return
+	fi
+	local out='' used=0 i ch cp cw
+	for (( i = 0; i < n; i++ )); do
+		ch=${s:i:1}
+		printf -v cp '%d' "'$ch"
+		char_width "$cp"
+		cw=$REPLY
+		if (( cw == 0 )); then
+			out+=$ch
+			continue
+		fi
+		# The last character can use the cell that the ellipsis needs.
+		if (( used + cw > w )) || (( used + cw == w && i < n - 1 )); then
+			out+=…
+			(( used++ ))
+			break
+		fi
+		out+=$ch
+		(( used += cw ))
+	done
+	printf -v REPLY '%s%*s' "$out" $(( w - used )) ''
+}
+
+# Sets FIT_W and FIT_H to the size of $1 x $2 shrunk into $3 x $4. It never enlarges.
+fit_px() {
+	local w=$1 h=$2 bw=$3 bh=$4
+	FIT_W=$w FIT_H=$h
+	if (( w > bw || h > bh )); then
+		if (( w * bh > h * bw )); then
+			FIT_W=$bw FIT_H=$(( h * bw / w ))
+		else
+			FIT_H=$bh FIT_W=$(( w * bh / h ))
+		fi
+	fi
+	(( FIT_W < 1 )) && FIT_W=1
+	(( FIT_H < 1 )) && FIT_H=1
+	return 0
+}
+
+# Sets REPLY to a line of $1 copies of the string $2.
+repeat() {
+	printf -v REPLY '%*s' "$1" ''
+	REPLY=${REPLY// /$2}
+}
+# bashfs: end util.bash
+# bashfs: begin terminal.bash
+# The terminal: modes, size, tmux, and the queries that the terminal answers.
+
+term_init() {
+	STTY_SAVED=$(stty -g) || die 'cannot read the terminal settings'
+	stty -echo -icanon -ixon min 1 time 0
+	# Alternate screen, hidden cursor, no automatic line wrap.
+	printf '\e[?1049h\e[?25l\e[?7l'
+	TERM_READY=1
+}
+
+term_restore() {
+	(( TERM_READY )) || return 0
+	TERM_READY=0
+	printf '\e[0m\e[?7h\e[?25h\e[?1049l'
+	stty "$STTY_SAVED"
+}
+
+term_size() {
+	local size
+	size=$(stty size 2>/dev/null) || size='24 80'
+	ROWS=${size% *} COLS=${size#* }
+}
+
+# Sets REPLY to $1 in a form that reaches the outer terminal through tmux.
+wrap_passthrough() {
+	if (( IN_TMUX )); then
+		REPLY=$'\ePtmux;'${1//$'\e'/$'\e\e'}$'\e\\'
+	else
+		REPLY=$1
+	fi
+}
+
+# tmux drops passthrough sequences unless the pane allows them.
+# tmux versions without the option always allow them.
+tmux_setup() {
+	local value
+	value=$(tmux show-options -Apv -t "$TMUX_PANE" allow-passthrough 2>/dev/null) || return 0
+	[[ $value == on || $value == all ]] && return 0
+	tmux set-option -p -t "$TMUX_PANE" allow-passthrough on 2>/dev/null ||
+		die 'tmux blocks image data: run "tmux set -g allow-passthrough on", or use --no-images'
+	TMUX_RESTORE=1
+}
+
+tmux_restore() {
+	(( TMUX_RESTORE )) || return 0
+	TMUX_RESTORE=0
+	tmux set-option -p -u -t "$TMUX_PANE" allow-passthrough 2>/dev/null
+}
+
+# tmux discards its whole output queue for a client when the queue grows past
+# eight bytes for each cell of that client. A window must stay well below that.
+tmux_window_cap() {
+	WIN_CAP=$WIN_MAX
+	(( IN_TMUX )) || return 0
+	local size
+	size=$(tmux display-message -p -t "$TMUX_PANE" '#{client_width}x#{client_height}' 2>/dev/null) || size=
+	local w=${size%x*} h=${size#*x}
+	[[ $w == +([0-9]) && $h == +([0-9]) ]] || { w=$COLS h=$ROWS; }
+	WIN_CAP=$(( w * h * 4 ))
+	(( WIN_CAP < WIN_MIN )) && WIN_CAP=$WIN_MIN
+	(( WIN_CAP > WIN_MAX )) && WIN_CAP=$WIN_MAX
+	(( TX_WIN > WIN_CAP )) && TX_WIN=$WIN_CAP
+	return 0
+}
+
+# tmux sends an answer to the active pane, whichever pane asked.
+pane_focused() {
+	(( IN_TMUX )) || return 0
+	if (( NOW - FOCUS_AT >= FOCUS_CACHE_MS )); then
+		FOCUS_AT=$NOW
+		local state
+		state=$(tmux display-message -p -t "$TMUX_PANE" \
+			'#{pane_active}#{window_active}#{pane_in_mode}#{session_attached}' 2>/dev/null) || state=
+		[[ $state == 110[1-9]* ]]
+		FOCUS_OK=$?
+	fi
+	return "$FOCUS_OK"
+}
+
+# Asks the terminal for the cell size in pixels. The answer arrives as input.
+cell_query() {
+	pane_focused || return 0
+	wrap_passthrough $'\e[16t'
+	printf '%s' "$REPLY"
+	CELL_WAIT_UNTIL=$(( NOW + 500 ))
+}
+
+# Handles the answer to cell_query: "6;height;width".
+cell_reply() {
+	local rest=${1#6;} h w
+	h=${rest%%;*} w=${rest#*;}
+	[[ $h == +([0-9]) && $w == +([0-9]) ]] || return 0
+	(( h > 0 && w > 0 )) || return 0
+	CELL_WAIT_UNTIL=0
+	(( CELL_KNOWN && h == CELL_H && w == CELL_W )) && return 0
+	CELL_W=$w CELL_H=$h CELL_KNOWN=1
+	preview_restart
+}
+
+# Sends the first queries: cell size, graphics support, and one status report.
+# The terminal answers in order, so the status report closes the handshake.
+handshake_send() {
+	local out
+	wrap_passthrough $'\e[16t'
+	out=$REPLY
+	out+="${GFX_PRE}i=1,s=1,v=1,a=q,t=d,f=24;AAAA${GFX_SUF}${DSR}"
+	printf '%s' "$out"
+	(( PROBES++ ))
+	HS_NEED=$PROBES HS_AT=$NOW HS_PENDING=1
+}
+
+handshake_tick() {
+	(( HS_PENDING )) || return 0
+	if (( ACKS >= HS_NEED )); then
+		HS_PENDING=0 ACK_MODE=on
+		RTT_MS=$(( NOW - HS_AT ))
+		(( RTT_MS < 1 )) && RTT_MS=1
+		if [[ $GFX == unknown ]]; then
+			GFX=unsupported
+			status 'this terminal does not answer the kitty graphics query: previews are off'
+		fi
+	elif (( NOW - HS_AT > HANDSHAKE_MS )); then
+		HS_PENDING=0 ACKS=$PROBES
+		ack_mode_off
+		[[ $GFX == unknown ]] && GFX=on
+	else
+		return 0
+	fi
+	D_DETAILS=1 D_PREVIEW=1
+}
+# bashfs: end terminal.bash
+# bashfs: begin layout.bash
+# Screen layout. All values are in cells, and positions start at one.
+#
+#   wide                               narrow (stacked)
+#   +--------------------------+       +-----------------+
+#   | header                   |       | header          |
+#   | list  | preview          |       | list            |
+#   |       |                  |       |-----------------|
+#   |       | details          |       | preview         |
+#   | footer                   |       | details         |
+#   +--------------------------+       | footer          |
+#                                      +-----------------+
+
+layout() {
+	term_size
+	tmux_window_cap
+	TOO_SMALL=0 SEP_COL=0 SEP_ROW=0
+	L_W=0 L_H=0 P_W=0 P_H=0 D_W=0 D_H=0
+	if (( COLS < 20 || ROWS < 6 )); then
+		TOO_SMALL=1
+		return
+	fi
+	local body_y=2 body_h=$(( ROWS - 2 ))
+	# The right-hand region holds the preview and, below it, the details.
+	local r_x=1 r_y=$body_y r_w=$COLS r_h=$body_h
+	if (( ZOOM )); then
+		:
+	elif (( COLS >= WIDE_MIN_COLS )); then
+		L_X=1 L_Y=$body_y L_H=$body_h
+		L_W=$(( COLS * 30 / 100 ))
+		(( L_W < 26 )) && L_W=26
+		(( L_W > 46 )) && L_W=46
+		SEP_COL=$(( L_W + 1 ))
+		r_x=$(( SEP_COL + 2 ))
+		r_w=$(( COLS - r_x + 1 ))
+	else
+		L_X=1 L_Y=$body_y L_W=$COLS
+		L_H=$(( body_h * 30 / 100 ))
+		(( L_H < 3 )) && L_H=3
+		SEP_ROW=$(( body_y + L_H ))
+		r_y=$(( SEP_ROW + 1 ))
+		r_h=$(( body_h - L_H - 1 ))
+	fi
+
+	D_X=$r_x D_W=$r_w
+	D_H=$(( r_h * 2 / 5 ))
+	(( D_H > DETAIL_ROWS )) && D_H=$DETAIL_ROWS
+	(( r_h < 5 || D_W < 16 )) && D_H=0
+	P_X=$r_x P_Y=$r_y P_W=$r_w
+	P_H=$(( D_H ? r_h - D_H - 1 : r_h ))
+	(( P_H < 1 )) && P_H=0
+	D_Y=$(( P_Y + P_H + 1 ))
+	(( P_W > ${#DIA[@]} )) && P_W=${#DIA[@]}
+	return 0
+}
+
+# Computes the cells that the image covers: BOX_C x BOX_R at BOX_X, BOX_Y.
+# The image keeps its aspect ratio and sits in the center of the preview pane.
+box_compute() {
+	local pw=$(( P_W * CELL_W )) ph=$(( P_H * CELL_H ))
+	local scale=$(( pw * 1000 / IMG_W )) other=$(( ph * 1000 / IMG_H ))
+	(( other < scale )) && scale=$other
+	(( scale > MAX_UPSCALE * 1000 )) && scale=$(( MAX_UPSCALE * 1000 ))
+	local dw=$(( IMG_W * scale / 1000 )) dh=$(( IMG_H * scale / 1000 ))
+	BOX_C=$(( (dw + CELL_W - 1) / CELL_W ))
+	BOX_R=$(( (dh + CELL_H - 1) / CELL_H ))
+	(( BOX_C < 1 )) && BOX_C=1
+	(( BOX_R < 1 )) && BOX_R=1
+	(( BOX_C > P_W )) && BOX_C=$P_W
+	(( BOX_R > P_H )) && BOX_R=$P_H
+	BOX_X=$(( P_X + (P_W - BOX_C) / 2 ))
+	BOX_Y=$(( P_Y + (P_H - BOX_R) / 2 ))
+}
+
+# Sets FIT_W and FIT_H to the largest pixel size that the last stage can use.
+stage_limit() {
+	local pw=$(( P_W * CELL_W )) ph=$(( P_H * CELL_H )) edge=${QUALITY_EDGE[QUALITY]}
+	FIT_W=$pw FIT_H=$ph
+	(( edge == 0 )) && return 0
+	(( FIT_W > edge )) && FIT_W=$edge
+	(( FIT_H > edge )) && FIT_H=$edge
+	return 0
+}
+# bashfs: end layout.bash
+# bashfs: begin directory.bash
+# The directory listing and the selection.
+
+# Reads the current directory into the E_* arrays. Directories come first.
+dir_load() {
+	local -a sort_args filter=()
+	case $SORT in
+		time) sort_args=(-t/ '-k4,4nr') ;;
+		size) sort_args=(-t/ '-k3,3nr') ;;
+		*) sort_args=(-t/ -k5 -f -V) ;;
+	esac
+	(( SHOW_HIDDEN )) || filter=('!' -name '.*')
+
+	local -a dn=() dl=() ds=() dm=() fn=() fk=() fl=() fs=() fm=() fimg=()
+	local target type size mtime name
+	# A name cannot hold a slash, so the slash is a safe field separator.
+	while IFS=/ read -r -d '' target type size mtime name; do
+		if [[ $target == d ]]; then
+			dn+=("$name") ds+=("$size") dm+=("${mtime%.*}")
+			[[ $type == l ]] && dl+=(1) || dl+=(0)
+			continue
+		fi
+		fn+=("$name") fs+=("$size") fm+=("${mtime%.*}")
+		[[ $type == l ]] && fl+=(1) || fl+=(0)
+		if [[ $target != f ]]; then
+			fk+=(o) fimg+=(0)
+			continue
+		fi
+		fk+=(f)
+		if is_image "$name"; then
+			fimg+=(1)
+		else
+			fimg+=(0)
+		fi
+	done < <(find . -mindepth 1 -maxdepth 1 "${filter[@]}" -printf '%Y/%y/%s/%T@/%f\0' 2>/dev/null |
+		sort -z "${sort_args[@]}")
+
+	local -a dk=() di=()
+	local i
+	for (( i = 0; i < ${#dn[@]}; i++ )); do
+		dk+=(d) di+=(0)
+	done
+	E_NAME=("${dn[@]}" "${fn[@]}")
+	E_KIND=("${dk[@]}" "${fk[@]}")
+	E_LINK=("${dl[@]}" "${fl[@]}")
+	E_SIZE=("${ds[@]}" "${fs[@]}")
+	E_MTIME=("${dm[@]}" "${fm[@]}")
+	E_IMG=("${di[@]}" "${fimg[@]}")
+	N=${#E_NAME[@]}
+	[[ -r . && -x . ]] || status "cannot read $PWD"
+}
+
+# Sets REPLY to the index of the entry named $1, or to zero.
+dir_find() {
+	local i
+	REPLY=0
+	[[ -n $1 ]] || return 0
+	for (( i = 0; i < N; i++ )); do
+		if [[ ${E_NAME[i]} == "$1" ]]; then
+			REPLY=$i
+			return 0
+		fi
+	done
+}
+
+# Enters the directory $1 and selects the entry named $2 when it exists.
+dir_change() {
+	local from=$PWD
+	(( N > 0 )) && DIR_SEL[$from]=${E_NAME[CUR]}
+	if ! cd -- "$1" 2>/dev/null; then
+		status "cannot open $1"
+		return 1
+	fi
+	dir_load
+	dir_find "${2:-${DIR_SEL[$PWD]-}}"
+	CUR=$REPLY TOP=0
+	scroll_fix
+	D_ALL=1
+	preview_reset
+}
+
+# Loads the directory again and keeps the selection on the same name.
+dir_reload() {
+	local name=
+	(( N > 0 )) && name=${E_NAME[CUR]}
+	dir_load
+	dir_find "$name"
+	CUR=$REPLY TOP=0
+	scroll_fix
+	D_ALL=1
+	preview_reset
+}
+
+# Moves the top of the list so that the selection is visible.
+# The list moves by half a page, which costs fewer redraws on a slow link.
+# Returns success when the top moved.
+scroll_fix() {
+	local top=$TOP h=$L_H
+	(( h < 1 )) && h=1
+	if (( CUR < TOP )); then
+		TOP=$(( CUR - h / 2 ))
+	elif (( CUR >= TOP + h )); then
+		TOP=$(( CUR - h + 1 + h / 2 ))
+	fi
+	(( TOP > N - h )) && TOP=$(( N - h ))
+	(( TOP < 0 )) && TOP=0
+	(( TOP != top ))
+}
+
+select_index() {
+	local i=$1 old=$CUR
+	(( i >= N )) && i=$(( N - 1 ))
+	(( i < 0 )) && i=0
+	(( i == CUR )) && return 0
+	CUR=$i
+	if scroll_fix; then
+		D_LIST=1
+	else
+		DIRTY_ROWS+=("$old" "$CUR")
+	fi
+	D_FOOTER=1
+	preview_reset
+}
+
+# Opens the selection: a directory is entered, an image is zoomed.
+open_selection() {
+	(( N > 0 )) || return 0
+	case ${E_KIND[CUR]} in
+		d) dir_change "${E_NAME[CUR]}" ;;
+		f) (( E_IMG[CUR] )) && zoom_toggle ;;
+	esac
+}
+
+zoom_toggle() {
+	ZOOM=$(( ! ZOOM ))
+	layout
+	scroll_fix
+	D_ALL=1
+	preview_restart
+}
+
+# Selects the next entry whose name holds the search text. $1 is the direction.
+search_jump() {
+	local step=$1 start=$2 i k name needle=${SEARCH,,}
+	[[ -n $needle ]] || return 1
+	for (( k = 0; k < N; k++ )); do
+		i=$(( (start + k * step % N + N) % N ))
+		name=${E_NAME[i],,}
+		if [[ $name == *"$needle"* ]]; then
+			select_index "$i"
+			return 0
+		fi
+	done
+	return 1
+}
+# bashfs: end directory.bash
+# bashfs: begin metadata.bash
+# Image header parser: reads the format, size and EXIF tags of an image file without decoding pixels.
+
+declare -gA META=()
+# Bytes of the last read, its file offset, and scratch results of the helpers.
+declare -ga META_B=()
+declare -gi META_BOFF=0 META_EOF=0 META_I=0 META_N=0 META_D=0 META_LE=0 META_XPTR=0
+declare -g META_S=""
+# TIFF image tags, kept until meta_tiff derives color and alpha from them.
+declare -gi META_TPHOTO=-1 META_TSPP=-1 META_TEXTRA=0 META_TCOMP=-1
+
+# meta_read FILE OFFSET COUNT loads up to COUNT bytes into META_B.
+meta_read() {
+	local out
+	META_B=()
+	META_BOFF=$2
+	META_EOF=1
+	out=$(od -An -v -tu1 -j "$2" -N "$3" -- "$1" 2>/dev/null) || return 1
+	IFS=$' \t\n' read -r -d '' -a META_B <<<"$out" || true
+	((${#META_B[@]} == $3)) && META_EOF=0
+	((${#META_B[@]} > 0))
+}
+
+# meta_need FILE OFFSET COUNT makes sure META_B holds the file bytes
+# [OFFSET, OFFSET+COUNT) and sets META_I to the index of OFFSET.
+meta_need() {
+	local off=$2 cnt=$3 len
+	if ((off < META_BOFF || off + cnt > META_BOFF + ${#META_B[@]})); then
+		((off >= META_BOFF && META_EOF)) && return 1
+		len=$cnt
+		((len < 4096)) && len=4096
+		meta_read "$1" "$off" "$len" || return 1
+	fi
+	((off + cnt <= META_BOFF + ${#META_B[@]})) || return 1
+	META_I=$((off - META_BOFF))
+}
+
+# Integer readers on META_B indexes; the result goes to META_N.
+meta_be16() {
+	META_N=$((META_B[$1] << 8 | META_B[$1 + 1]))
+}
+meta_le16() {
+	META_N=$((META_B[$1] | META_B[$1 + 1] << 8))
+}
+meta_be32() {
+	META_N=$((META_B[$1] << 24 | META_B[$1 + 1] << 16 | META_B[$1 + 2] << 8 | META_B[$1 + 3]))
+}
+meta_le32() {
+	META_N=$((META_B[$1] | META_B[$1 + 1] << 8 | META_B[$1 + 2] << 16 | META_B[$1 + 3] << 24))
+}
+# Readers in the TIFF byte order (META_LE).
+meta_u16() {
+	if ((META_LE)); then meta_le16 "$1"; else meta_be16 "$1"; fi
+}
+meta_u32() {
+	if ((META_LE)); then meta_le32 "$1"; else meta_be32 "$1"; fi
+}
+
+# meta_str INDEX COUNT puts printable text from META_B into META_S. It stops at
+# the first NUL, drops control bytes and trims trailing spaces.
+meta_str() {
+	local i=$1 end=$(($1 + $2)) b o c s=""
+	for ((; i < end; i++)); do
+		b=${META_B[i]}
+		((b == 0)) && break
+		((b < 32 || b == 127)) && continue
+		printf -v o '%03o' "$b"
+		printf -v c '%b' "\\0$o"
+		s+=$c
+	done
+	META_S=${s%"${s##*[! ]}"}
+}
+
+# meta_dec1 NUM DEN puts NUM/DEN with at most one fraction digit into META_S.
+meta_dec1() {
+	local t
+	(($2 > 0)) || return 1
+	t=$((($1 * 10 + $2 / 2) / $2))
+	if ((t % 10)); then META_S=$((t / 10)).$((t % 10)); else META_S=$((t / 10)); fi
+}
+
+meta_detail() {
+	META[detail]=${META[detail]:+${META[detail]},}$1
+}
+
+# meta_num FILE OFFSET TYPE reads the first value of a TIFF field. A RATIONAL
+# goes to META_N / META_D.
+meta_num() {
+	local n
+	case $3 in
+	1 | 7)
+		meta_need "$1" "$2" 1 || return 1
+		META_N=${META_B[META_I]}
+		;;
+	3)
+		meta_need "$1" "$2" 2 || return 1
+		meta_u16 "$META_I"
+		;;
+	4)
+		meta_need "$1" "$2" 4 || return 1
+		meta_u32 "$META_I"
+		;;
+	5)
+		meta_need "$1" "$2" 8 || return 1
+		meta_u32 $((META_I + 4))
+		n=$META_N
+		meta_u32 "$META_I"
+		META_D=$n
+		;;
+	*) return 1 ;;
+	esac
+}
+
+# meta_ascii FILE OFFSET COUNT reads the start of an ASCII field into META_S.
+meta_ascii() {
+	local cnt=$3
+	((cnt > 255)) && cnt=255
+	meta_need "$1" "$2" "$cnt" || return 1
+	meta_str "$META_I" "$cnt"
+	[[ -n $META_S ]]
+}
+
+# meta_tag FILE BASE TAG TYPE VOFF TIFF stores one IFD field in META. VOFF is
+# relative to BASE. TIFF=1 also accepts the image structure tags.
+meta_tag() {
+	local f=$1 at=$(($2 + $5)) tag=$3 type=$4 tiff=$6
+	case $tag in
+	256 | 257 | 258 | 259 | 262 | 277)
+		((tiff)) || return 0
+		meta_num "$f" "$at" "$type" || return 0
+		case $tag in
+		256) ((META_N > 0)) && META[width]=$META_N ;;
+		257) ((META_N > 0)) && META[height]=$META_N ;;
+		258) ((META_N > 0)) && META[bits]=$META_N ;;
+		259) META_TCOMP=$META_N ;;
+		262) META_TPHOTO=$META_N ;;
+		277) META_TSPP=$META_N ;;
+		esac
+		;;
+	338) ((tiff)) && META_TEXTRA=1 ;;
+	271) [[ $type == 2 ]] && meta_ascii "$f" "$at" "$7" && META[make]=$META_S ;;
+	272) [[ $type == 2 ]] && meta_ascii "$f" "$at" "$7" && META[model]=$META_S ;;
+	42036) [[ $type == 2 ]] && meta_ascii "$f" "$at" "$7" && META[lens]=$META_S ;;
+	306)
+		[[ $type == 2 && -z ${META[datetime]-} ]] && meta_ascii "$f" "$at" "$7" && META[datetime]=$META_S
+		;;
+	36867) [[ $type == 2 ]] && meta_ascii "$f" "$at" "$7" && META[datetime]=$META_S ;;
+	274)
+		meta_num "$f" "$at" "$type" || return 0
+		((META_N >= 1 && META_N <= 8)) && META[orientation]=$META_N
+		;;
+	34855)
+		meta_num "$f" "$at" "$type" || return 0
+		((META_N > 0)) && META[iso]=$META_N
+		;;
+	34665)
+		meta_num "$f" "$at" "$type" || return 0
+		META_XPTR=$META_N
+		;;
+	33434)
+		[[ $type == 5 ]] && meta_num "$f" "$at" 5 || return 0
+		((META_N > 0 && META_D > 0)) || return 0
+		if ((META_N < META_D)); then
+			META[exposure]=1/$(((META_D + META_N / 2) / META_N))
+		else
+			meta_dec1 "$META_N" "$META_D" && META[exposure]=$META_S
+		fi
+		;;
+	33437 | 37386)
+		[[ $type == 5 ]] && meta_num "$f" "$at" 5 || return 0
+		((META_N > 0)) && meta_dec1 "$META_N" "$META_D" || return 0
+		if ((tag == 33437)); then META[fnumber]=$META_S; else META[focal]=$META_S; fi
+		;;
+	esac
+	return 0
+}
+
+# meta_ifd FILE BASE LIMIT OFFSET TIFF walks one IFD. BASE is the file offset of
+# the TIFF header; OFFSET and every value offset must stay below LIMIT.
+meta_ifd() {
+	local f=$1 base=$2 lim=$3 off=$4 tiff=$5
+	local n i e tag type cnt size voff
+	((off >= 8 && off + 2 <= lim)) || return 1
+	meta_need "$f" $((base + off)) 2 || return 1
+	meta_u16 "$META_I"
+	n=$META_N
+	((n > 0 && n <= 1024 && off + 2 + n * 12 <= lim)) || return 1
+	for ((i = 0; i < n; i++)); do
+		meta_need "$f" $((base + off + 2 + i * 12)) 12 || return 1
+		e=$META_I
+		meta_u16 "$e"
+		tag=$META_N
+		meta_u16 $((e + 2))
+		type=$META_N
+		meta_u32 $((e + 4))
+		cnt=$META_N
+		case $type in
+		1 | 2 | 6 | 7) size=1 ;;
+		3 | 8) size=2 ;;
+		4 | 9 | 11) size=4 ;;
+		5 | 10 | 12) size=8 ;;
+		*) continue ;;
+		esac
+		((cnt > 0 && cnt <= 1048576)) || continue
+		size=$((size * cnt))
+		if ((size <= 4)); then
+			voff=$((off + 2 + i * 12 + 8))
+		else
+			meta_u32 $((e + 8))
+			voff=$META_N
+		fi
+		((voff + size <= lim)) || continue
+		meta_tag "$f" "$base" "$tag" "$type" "$voff" "$tiff" "$cnt"
+	done
+}
+
+# meta_exif FILE BASE LIMIT TIFF parses a TIFF structure (an EXIF block or a
+# whole TIFF file) that starts at BASE and is LIMIT bytes long.
+meta_exif() {
+	local f=$1 base=$2 lim=$3 tiff=$4 ifd0
+	((lim >= 8)) || return 1
+	meta_need "$f" "$base" 8 || return 1
+	if ((META_B[META_I] == 73 && META_B[META_I + 1] == 73 && META_B[META_I + 2] == 42 && META_B[META_I + 3] == 0)); then
+		META_LE=1
+	elif ((META_B[META_I] == 77 && META_B[META_I + 1] == 77 && META_B[META_I + 2] == 0 && META_B[META_I + 3] == 42)); then
+		META_LE=0
+	else
+		return 1
+	fi
+	meta_u32 $((META_I + 4))
+	ifd0=$META_N
+	META_XPTR=0
+	meta_ifd "$f" "$base" "$lim" "$ifd0" "$tiff" || return 1
+	((META_XPTR && META_XPTR != ifd0)) || return 0
+	meta_ifd "$f" "$base" "$lim" "$META_XPTR" 0
+	return 0
+}
+
+meta_png() {
+	local f=$1 pos=33 i len type trns=0 actl=0
+	meta_need "$f" 0 33 || return 1
+	meta_be32 12
+	((META_N == 0x49484452)) || return 1
+	meta_be32 16
+	META[width]=$META_N
+	meta_be32 20
+	META[height]=$META_N
+	META[bits]=${META_B[24]}
+	case ${META_B[25]} in
+	0) META[color]=Gray ;;
+	2) META[color]=RGB ;;
+	3) META[color]=Palette ;;
+	4) META[color]=Gray+Alpha ;;
+	6) META[color]=RGBA ;;
+	esac
+	[[ ${META_B[25]} == [46] ]] && trns=1
+	((META_B[28] == 1)) && meta_detail interlaced
+	for ((i = 0; i < 1024; i++)); do
+		meta_need "$f" "$pos" 8 || break
+		meta_be32 "$META_I"
+		len=$META_N
+		meta_be32 $((META_I + 4))
+		type=$META_N
+		case $type in
+		$((0x49444154)) | $((0x49454e44))) break ;;
+		$((0x74524e53))) trns=1 ;;
+		$((0x6163544c))) actl=1 ;;
+		$((0x65584966))) meta_exif "$f" $((pos + 8)) "$len" 0 ;;
+		esac
+		pos=$((pos + 12 + len))
+	done
+	((actl)) && meta_detail animated
+	META[alpha]=$trns
+	return 0
+}
+
+meta_jpeg() {
+	local f=$1 pos=2 seg fill m len
+	META[alpha]=0
+	for ((seg = 0; seg < 1024; seg++)); do
+		meta_need "$f" "$pos" 2 || return 1
+		((META_B[META_I] == 255)) || return 1
+		# A marker can follow any number of 0xFF fill bytes.
+		for ((fill = 0; fill < 65536; fill++)); do
+			meta_need "$f" $((pos + 1)) 1 || return 1
+			((META_B[META_I] == 255)) || break
+			pos=$((pos + 1))
+		done
+		m=${META_B[META_I]}
+		pos=$((pos + 2))
+		((m == 0xd9 || m == 0xda || m == 0)) && return 1
+		# Standalone markers carry no length: TEM, RSTn and SOI.
+		((m == 1 || (m >= 0xd0 && m <= 0xd8))) && continue
+		meta_need "$f" "$pos" 2 || return 1
+		meta_be16 "$META_I"
+		len=$META_N
+		((len >= 2)) || return 1
+		if ((m >= 0xc0 && m <= 0xcf && m != 0xc4 && m != 0xc8 && m != 0xcc)); then
+			((len >= 8)) || return 1
+			meta_need "$f" "$pos" 8 || return 1
+			META[bits]=${META_B[META_I + 2]}
+			meta_be16 $((META_I + 3))
+			META[height]=$META_N
+			meta_be16 $((META_I + 5))
+			META[width]=$META_N
+			case ${META_B[META_I + 7]} in
+			1) META[color]=Gray ;;
+			3) META[color]=YCbCr ;;
+			4) META[color]=CMYK ;;
+			esac
+			case $m in
+			192) meta_detail baseline ;;
+			193) meta_detail extended ;;
+			194) meta_detail progressive ;;
+			195) meta_detail lossless ;;
+			esac
+			return 0
+		fi
+		# APP1 with "Exif\0\0"; the whole segment is loaded with one read.
+		if ((m == 0xe1 && len >= 16)) && meta_need "$f" $((pos + 2)) $((len - 2)); then
+			if ((META_B[META_I] == 69 && META_B[META_I + 1] == 120 && META_B[META_I + 2] == 105 &&
+				META_B[META_I + 3] == 102 && META_B[META_I + 4] == 0 && META_B[META_I + 5] == 0)); then
+				meta_exif "$f" $((pos + 8)) $((len - 8)) 0
+			fi
+		fi
+		pos=$((pos + len))
+	done
+	return 1
+}
+
+meta_gif() {
+	meta_need "$1" 0 13 || return 1
+	meta_le16 6
+	META[width]=$META_N
+	meta_le16 8
+	META[height]=$META_N
+	META[bits]=$(((META_B[10] & 7) + 1))
+	META[color]=Palette
+	META[alpha]=0
+	if ((META_B[4] == 55)); then META[detail]=GIF87a; else META[detail]=GIF89a; fi
+}
+
+meta_bmp() {
+	local f=$1 hs w h bpp comp=0 amask=0
+	meta_need "$f" 0 26 || return 1
+	meta_le32 14
+	hs=$META_N
+	if ((hs == 12)); then
+		meta_le16 18
+		w=$META_N
+		meta_le16 20
+		h=$META_N
+		meta_le16 24
+		bpp=$META_N
+	elif ((hs >= 40 && hs <= 124)); then
+		meta_need "$f" 0 70 || meta_need "$f" 0 54 || return 1
+		meta_le32 18
+		w=$META_N
+		meta_le32 22
+		h=$META_N
+		meta_le16 28
+		bpp=$META_N
+		meta_le32 30
+		comp=$META_N
+		((w < 0x80000000)) || return 1
+		# A negative height means top-down rows.
+		((h >= 0x80000000)) && h=$((0x100000000 - h))
+		# The alpha mask is in the V3+ header, or after a plain header for BI_ALPHABITFIELDS.
+		if ((${#META_B[@]} >= 70 && (hs >= 56 || comp == 6))); then
+			meta_le32 66
+			amask=$META_N
+		fi
+	else
+		return 1
+	fi
+	META[width]=$w
+	META[height]=$h
+	case $bpp in
+	1 | 2 | 4 | 8)
+		META[bits]=$bpp
+		META[color]=Palette
+		;;
+	16) META[color]=RGB ;;
+	24)
+		META[bits]=8
+		META[color]=RGB
+		;;
+	32)
+		META[bits]=8
+		if ((amask)); then META[color]=RGBA; else META[color]=RGB; fi
+		;;
+	esac
+	if ((bpp == 32 && amask)); then META[alpha]=1; else META[alpha]=0; fi
+	case $comp in
+	0) ;;
+	1) META[detail]=BI_RLE8 ;;
+	2) META[detail]=BI_RLE4 ;;
+	3) META[detail]=BI_BITFIELDS ;;
+	4) META[detail]=BI_JPEG ;;
+	5) META[detail]=BI_PNG ;;
+	6) META[detail]=BI_ALPHABITFIELDS ;;
+	11) META[detail]=BI_CMYK ;;
+	12) META[detail]=BI_CMYKRLE8 ;;
+	13) META[detail]=BI_CMYKRLE4 ;;
+	*) META[detail]=$comp ;;
+	esac
+	return 0
+}
+
+meta_webp() {
+	local f=$1 pos i type len flags=0 alpha=0 anim=0 exif=0 codec=""
+	meta_need "$f" 0 30 || return 1
+	meta_be32 12
+	type=$META_N
+	META[bits]=8
+	case $type in
+	$((0x56503820)))
+		((META_B[23] == 0x9d && META_B[24] == 1 && META_B[25] == 0x2a)) || return 1
+		meta_le16 26
+		META[width]=$((META_N & 0x3fff))
+		meta_le16 28
+		META[height]=$((META_N & 0x3fff))
+		codec=lossy
+		;;
+	$((0x5650384c)))
+		# "VP8L": the signature byte 0x2f, the sizes minus one, then the alpha bit.
+		((META_B[20] == 0x2f)) || return 1
+		meta_le32 21
+		META[width]=$(((META_N & 0x3fff) + 1))
+		META[height]=$((((META_N >> 14) & 0x3fff) + 1))
+		alpha=$(((META_N >> 28) & 1))
+		codec=lossless
+		;;
+	$((0x56503858)))
+		# "VP8X": the flags, then the canvas size minus one.
+		flags=${META_B[20]}
+		alpha=$(((flags >> 4) & 1))
+		anim=$(((flags >> 1) & 1))
+		exif=$(((flags >> 3) & 1))
+		META[width]=$(((META_B[24] | META_B[25] << 8 | META_B[26] << 16) + 1))
+		META[height]=$(((META_B[27] | META_B[28] << 8 | META_B[29] << 16) + 1))
+		pos=30
+		for ((i = 0; i < 1024; i++)); do
+			[[ -z $codec ]] || ((exif)) || break
+			meta_need "$f" "$pos" 8 || break
+			meta_be32 "$META_I"
+			type=$META_N
+			meta_le32 $((META_I + 4))
+			len=$META_N
+			case $type in
+			$((0x56503820))) [[ -n $codec ]] || codec=lossy ;;
+			$((0x5650384c))) [[ -n $codec ]] || codec=lossless ;;
+			$((0x414e4d46)))
+				# ANMF holds a frame header, then the chunks of that frame.
+				pos=$((pos + 24))
+				continue
+				;;
+			$((0x45584946)))
+				exif=0
+				# Some writers keep the JPEG "Exif\0\0" prefix.
+				if meta_need "$f" $((pos + 8)) 6 && ((META_B[META_I] == 69 && META_B[META_I + 4] == 0)); then
+					meta_exif "$f" $((pos + 14)) $((len - 6)) 0
+				else
+					meta_exif "$f" $((pos + 8)) "$len" 0
+				fi
+				;;
+			esac
+			pos=$((pos + 8 + len + (len & 1)))
+		done
+		;;
+	*) return 1 ;;
+	esac
+	[[ -n $codec ]] && meta_detail "$codec"
+	((anim)) && meta_detail animated
+	META[alpha]=$alpha
+	if ((alpha)); then
+		META[color]=RGBA
+	elif [[ $codec == lossy ]]; then
+		META[color]=YCbCr
+	elif [[ $codec == lossless ]]; then
+		META[color]=RGB
+	fi
+	return 0
+}
+
+meta_tiff() {
+	local alpha
+	META_TPHOTO=-1 META_TSPP=-1 META_TEXTRA=0 META_TCOMP=-1
+	# A TIFF file is one TIFF structure; od finds the real end of the file.
+	meta_exif "$1" 0 0xffffffff 1 || return 1
+	# An extra sample needs a second sample to sit next to.
+	alpha=0
+	((META_TEXTRA && (META_TSPP == -1 || META_TSPP >= 2))) && alpha=1
+	META[alpha]=$alpha
+	case $META_TPHOTO in
+	0 | 1) if ((alpha)); then META[color]=Gray+Alpha; else META[color]=Gray; fi ;;
+	2) if ((alpha)); then META[color]=RGBA; else META[color]=RGB; fi ;;
+	3) META[color]=Palette ;;
+	5) META[color]=CMYK ;;
+	6) META[color]=YCbCr ;;
+	esac
+	case $META_TCOMP in
+	-1) ;;
+	1) META[detail]=None ;;
+	5) META[detail]=LZW ;;
+	6 | 7) META[detail]=JPEG ;;
+	8 | 32946) META[detail]=Deflate ;;
+	32773) META[detail]=PackBits ;;
+	*) META[detail]=$META_TCOMP ;;
+	esac
+	return 0
+}
+
+# meta_probe FILE fills META.
+meta_probe() {
+	local f=${1-} sig rc=1
+	META=()
+	META_B=()
+	META_BOFF=0
+	[[ -f $f && -r $f ]] || return 1
+	meta_read "$f" 0 4096 || return 1
+	printf -v sig '%02x' "${META_B[@]:0:12}"
+	case $sig in
+	89504e470d0a1a0a*) META[format]=PNG && meta_png "$f" && rc=0 ;;
+	ffd8*) META[format]=JPEG && meta_jpeg "$f" && rc=0 ;;
+	474946383[79]61*) META[format]=GIF && meta_gif "$f" && rc=0 ;;
+	424d*) META[format]=BMP && meta_bmp "$f" && rc=0 ;;
+	52494646????????57454250) META[format]=WebP && meta_webp "$f" && rc=0 ;;
+	49492a00* | 4d4d002a*) META[format]=TIFF && meta_tiff "$f" && rc=0 ;;
+	esac
+	META_B=()
+	if ((rc == 0 && ${META[width]:-0} > 0 && ${META[height]:-0} > 0)); then
+		return 0
+	fi
+	META=()
+	return 1
+}
+# bashfs: end metadata.bash
+# bashfs: begin jobs.bash
+# Background preview jobs. One job reads one file and writes its results into
+# its own directory.
+
+# Starts a job in the background. Sets JOB_PID.
+job_spawn() {
+	job_main "$@" </dev/null >/dev/null 2>&1 &
+	JOB_PID=$!
+}
+
+job_main() {
+	local kind=$1
+	JOB_OUT=$3 JOB_CHILD=0
+	trap job_abort TERM
+	case $kind in
+		image) job_image "${@:2}" ;;
+		dir) job_dir "$2" ;;
+		file) job_file "$2" ;;
+		*) job_other "$2" ;;
+	esac
+	: > "$JOB_OUT/done"
+}
+
+# The main loop stops a job with TERM. The job removes its own directory.
+job_abort() {
+	(( JOB_CHILD )) && kill "$JOB_CHILD" 2>/dev/null
+	rm -rf -- "$JOB_OUT"
+	exit 143
+}
+
+# Runs a command so that TERM can interrupt it. A trap does not run while
+# the shell waits for a foreground command.
+job_run() {
+	"$@" &
+	JOB_CHILD=$!
+	wait "$JOB_CHILD"
+	local rc=$?
+	JOB_CHILD=0
+	return "$rc"
+}
+
+# Writes the remaining arguments as lines to the result file $1.
+job_write() {
+	local name=$1
+	shift
+	printf '%s\n' "$@" > "$JOB_OUT/.$name" && mv -- "$JOB_OUT/.$name" "$JOB_OUT/$name"
+}
+
+# Appends the mode, the owner and the link target of $1 to INFO.
+job_stat_lines() {
+	local path=$1 text
+	text=$(stat -c '%A  %U:%G' -- "$path" 2>/dev/null) && INFO+=("Mode"$'\t'"$text")
+	if [[ -L $path ]]; then
+		text=$(readlink -- "$path") && INFO+=("Link"$'\t'"→ $text")
+	fi
+	return 0
+}
+
+job_dir() {
+	local path=$1 entry name count=0 images=0
+	local -a INFO=() text=()
+	shopt -s nullglob
+	(( SHOW_HIDDEN )) && shopt -s dotglob
+	for entry in "$path"/*; do
+		(( count++ ))
+		name=${entry##*/}
+		is_image "$name" && (( images++ ))
+		(( count > TEXT_LINES )) && continue
+		[[ -d $entry ]] && name+=/
+		text+=("${name//[[:cntrl:]]/?}")
+	done
+	INFO+=("Type"$'\t'"directory" "Items"$'\t'"$count, images: $images")
+	job_stat_lines "$path"
+	job_write info "${INFO[@]}"
+	(( count == 0 )) && text=('(empty directory)')
+	job_write text "${text[@]}"
+}
+
+job_file() {
+	local path=$1 line
+	local -a INFO=() text=() raw=()
+	if (( HAVE_FILE )); then
+		line=$(file -b -- "$path" 2>/dev/null) && INFO+=("Type"$'\t'"$line")
+	fi
+	job_stat_lines "$path"
+	job_write info "${INFO[@]}"
+	if [[ ! -r $path ]]; then
+		text=('(not readable)')
+	elif [[ ! -s $path ]]; then
+		text=('(empty file)')
+	elif grep -Iq '' -- "$path" 2>/dev/null; then
+		mapfile -t -n "$TEXT_LINES" raw < <(head -c 65536 -- "$path")
+		for line in "${raw[@]}"; do
+			line=${line//$'\t'/    }
+			text+=("${line//[[:cntrl:]]/}")
+		done
+	else
+		text=('(binary file)')
+	fi
+	job_write text "${text[@]}"
+}
+
+job_other() {
+	local -a INFO=()
+	job_stat_lines "$1"
+	(( ${#INFO[@]} )) && job_write info "${INFO[@]}"
+	job_write text '(not a regular file)'
+}
+
+# Appends the detail lines of the probed image to INFO. $1 and $2 are the
+# size after rotation.
+job_meta_lines() {
+	local w=$1 h=$2 line
+	line=${META[format]-image}
+	[[ -n ${META[color]-} ]] && line+=" · ${META[color]}"
+	[[ -n ${META[bits]-} ]] && line+=" ${META[bits]}-bit"
+	[[ -n ${META[detail]-} ]] && line+=" · ${META[detail]}"
+	INFO+=("Type"$'\t'"$line")
+
+	local a=$w b=$h t
+	while (( b )); do
+		t=$(( a % b )) a=$b b=$t
+	done
+	line="${w}×${h} · $(( w * h / 1000000 )).$(( w * h % 1000000 / 100000 )) MP"
+	if (( w / a <= 32 && h / a <= 32 )); then
+		line+=" · $(( w / a )):$(( h / a ))"
+	else
+		line+=" · $(( w / h )).$(( w * 100 / h % 100 / 10 ))$(( w * 100 / h % 10 )):1"
+	fi
+	(( ${META[orientation]:-1} > 1 )) && line+=" · EXIF rotation ${META[orientation]}"
+	INFO+=("Image"$'\t'"$line")
+
+	line=${META[make]-}
+	if [[ -n ${META[model]-} ]]; then
+		# Many cameras repeat the maker name in the model name.
+		[[ -n $line && ${META[model]} != "$line"* ]] && line+=" ${META[model]}" || line=${META[model]}
+	fi
+	[[ -n $line ]] && INFO+=("Camera"$'\t'"$line")
+
+	line=
+	[[ -n ${META[fnumber]-} ]] && line+="f/${META[fnumber]} · "
+	[[ -n ${META[exposure]-} ]] && line+="${META[exposure]} s · "
+	[[ -n ${META[iso]-} ]] && line+="ISO ${META[iso]} · "
+	[[ -n ${META[focal]-} ]] && line+="${META[focal]} mm · "
+	[[ -n $line ]] && INFO+=("Shot"$'\t'"${line% · }")
+	[[ -n ${META[datetime]-} ]] && INFO+=("Taken"$'\t'"${META[datetime]}")
+	[[ -n ${META[lens]-} ]] && INFO+=("Lens"$'\t'"${META[lens]}")
+	return 0
+}
+
+# Publishes the PNG file $2 as stage $1 with the pixel size $3 x $4.
+job_stage() {
+	local n=$1 png=$2 bytes
+	base64 -w0 -- "$png" > "$JOB_OUT/.s$n.b64" || return 1
+	bytes=$(stat -c %s -- "$JOB_OUT/.s$n.b64") || return 1
+	job_write "s$n.dim" "$3 $4 $bytes"
+	mv -- "$JOB_OUT/.s$n.b64" "$JOB_OUT/s$n.b64"
+}
+
+# job_image PATH OUT MAX_W MAX_H FILE_SIZE
+# MAX_W x MAX_H is the pixel limit of the last stage. Zero means: details only.
+job_image() {
+	local path=$1 max_w=$3 max_h=$4 fsize=$5
+	local -a INFO=()
+	local w=0 h=0 orient=1 format=
+	if meta_probe "$path"; then
+		w=${META[width]} h=${META[height]} orient=${META[orientation]:-1} format=${META[format]}
+		if (( orient >= 5 )); then
+			local t=$w
+			w=$h h=$t
+		fi
+		job_meta_lines "$w" "$h"
+	elif (( HAVE_FFPROBE )) && job_ffprobe "$path"; then
+		w=$PROBE_W h=$PROBE_H
+		declare -A META=([format]=$PROBE_CODEC)
+		job_meta_lines "$w" "$h"
+	fi
+	job_stat_lines "$path"
+	job_write info "${INFO[@]}"
+	if (( w < 1 || h < 1 )); then
+		job_write err 'this image format is not recognized'
+		return
+	fi
+	(( max_w > 0 )) || return 0
+
+	# A PNG file that is small enough needs no decoder.
+	local direct=0
+	if [[ $format == PNG ]] && (( orient == 1 )); then
+		(( w <= max_w && h <= max_h && fsize <= DIRECT_PNG_MAX )) && direct=1
+		(( HAVE_FFMPEG )) || direct=1
+	fi
+	if (( direct )); then
+		job_write geom "$w $h 1"
+		job_stage 1 "$path" "$w" "$h" || job_write err 'cannot read the file'
+		return
+	fi
+	if (( ! HAVE_FFMPEG )); then
+		job_write err 'ffmpeg is not installed: only PNG files have a preview'
+		return
+	fi
+
+	fit_px "$w" "$h" "$max_w" "$max_h"
+	local out_w=$FIT_W out_h=$FIT_H
+	fit_px "$w" "$h" "$THUMB_EDGE" "$THUMB_EDGE"
+	local thumb_w=$FIT_W thumb_h=$FIT_H stages=1
+	# A draft stage is useful only when the last stage is larger.
+	(( out_w * 2 > thumb_w * 3 )) && stages=2
+	job_write geom "$w $h $stages"
+
+	local turn=
+	case $orient in
+		2) turn=hflip, ;;
+		3) turn=hflip,vflip, ;;
+		4) turn=vflip, ;;
+		5) turn=transpose=0, ;;
+		6) turn=transpose=1, ;;
+		7) turn=transpose=3, ;;
+		8) turn=transpose=2, ;;
+	esac
+	local pix='format=pix_fmts=rgb24|rgba|gray|ya8' graph
+	local -a enc=(-frames:v 1 -c:v png -pred mixed -f image2 -update 1) outs
+	if (( stages == 2 )); then
+		graph="[0:v]${turn}split=2[a][b];"
+		graph+="[a]scale=${thumb_w}:${thumb_h}:flags=bilinear,${pix}[t];"
+		graph+="[b]scale=${out_w}:${out_h}:flags=lanczos,${pix}[f]"
+		outs=(-map '[t]' "${enc[@]}" "$JOB_OUT/1.png" -map '[f]' "${enc[@]}" "$JOB_OUT/2.png")
+	else
+		graph="[0:v]${turn}scale=${out_w}:${out_h}:flags=lanczos,${pix}[f]"
+		outs=(-map '[f]' "${enc[@]}" "$JOB_OUT/1.png")
+	fi
+	# ffmpeg reads the file through a link, so no file name can look like an option or a sequence pattern.
+	ln -s -- "$path" "$JOB_OUT/src"
+	if ! job_run ffmpeg -nostdin -y -v error -noautorotate -i "$JOB_OUT/src" \
+		-filter_complex "$graph" "${outs[@]}" 2> "$JOB_OUT/log"; then
+		local reason=
+		[[ -s $JOB_OUT/log ]] && reason=$(tail -n 1 -- "$JOB_OUT/log")
+		job_write err "ffmpeg cannot decode this file: ${reason:-no message}"
+		return
+	fi
+	if (( stages == 2 )); then
+		job_stage 1 "$JOB_OUT/1.png" "$thumb_w" "$thumb_h" &&
+			job_stage 2 "$JOB_OUT/2.png" "$out_w" "$out_h"
+	else
+		job_stage 1 "$JOB_OUT/1.png" "$out_w" "$out_h"
+	fi || job_write err 'cannot encode the preview'
+}
+
+# Reads the size of a file that the header parser does not know.
+job_ffprobe() {
+	local line
+	ln -s -- "$1" "$JOB_OUT/probe"
+	line=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height \
+		-of csv=p=0 "$JOB_OUT/probe" 2>/dev/null) || return 1
+	IFS=, read -r PROBE_CODEC PROBE_W PROBE_H _ <<< "$line"
+	[[ ${PROBE_W-} == +([0-9]) && ${PROBE_H-} == +([0-9]) ]]
+}
+# bashfs: end jobs.bash
+# bashfs: begin graphics.bash
+# The kitty graphics protocol and the paced transfer of image data.
+#
+# An image is sent as a virtual placement. The screen then shows it through
+# placeholder cells, which are ordinary text for tmux. The data goes out in
+# windows. After each window the program asks the terminal for a status
+# report and waits for the answer. The link never holds more than one
+# window of image data in front of a screen update.
+
+# The combining marks that number the rows and columns of a placeholder cell.
+# This is the table of the kitty graphics protocol, in its order.
+readonly DIA_HEX='
+0305 030D 030E 0310 0312 033D 033E 033F 0346 034A 034B 034C 0350 0351 0352 0357 035B 0363 0364 0365 0366 0367
+0368 0369 036A 036B 036C 036D 036E 036F 0483 0484 0485 0486 0487 0592 0593 0594 0595 0597 0598 0599 059C 059D
+059E 059F 05A0 05A1 05A8 05A9 05AB 05AC 05AF 05C4 0610 0611 0612 0613 0614 0615 0616 0617 0657 0658 0659 065A
+065B 065D 065E 06D6 06D7 06D8 06D9 06DA 06DB 06DC 06DF 06E0 06E1 06E2 06E4 06E7 06E8 06EB 06EC 0730 0732 0733
+0735 0736 073A 073D 073F 0740 0741 0743 0745 0747 0749 074A 07EB 07EC 07ED 07EE 07EF 07F0 07F1 07F3 0816 0817
+0818 0819 081B 081C 081D 081E 081F 0820 0821 0822 0823 0825 0826 0827 0829 082A 082B 082C 082D 0951 0953 0954
+0F82 0F83 0F86 0F87 135D 135E 135F 17DD 193A 1A17 1A75 1A76 1A77 1A78 1A79 1A7A 1A7B 1A7C 1B6B 1B6D 1B6E 1B6F
+1B70 1B71 1B72 1B73 1CD0 1CD1 1CD2 1CDA 1CDB 1CE0 1DC0 1DC1 1DC3 1DC4 1DC5 1DC6 1DC7 1DC8 1DC9 1DCB 1DCC 1DD1
+1DD2 1DD3 1DD4 1DD5 1DD6 1DD7 1DD8 1DD9 1DDA 1DDB 1DDC 1DDD 1DDE 1DDF 1DE0 1DE1 1DE2 1DE3 1DE4 1DE5 1DE6 1DFE
+20D0 20D1 20D4 20D5 20D6 20D7 20DB 20DC 20E1 20E7 20E9 20F0 2CEF 2CF0 2CF1 2DE0 2DE1 2DE2 2DE3 2DE4 2DE5 2DE6
+2DE7 2DE8 2DE9 2DEA 2DEB 2DEC 2DED 2DEE 2DEF 2DF0 2DF1 2DF2 2DF3 2DF4 2DF5 2DF6 2DF7 2DF8 2DF9 2DFA 2DFB 2DFC
+2DFD 2DFE 2DFF A66F A67C A67D A6F0 A6F1 A8E0 A8E1 A8E2 A8E3 A8E4 A8E5 A8E6 A8E7 A8E8 A8E9 A8EA A8EB A8EC A8ED
+A8EE A8EF A8F0 A8F1 AAB0 AAB2 AAB3 AAB7 AAB8 AABE AABF AAC1 FE20 FE21 FE22 FE23 FE24 FE25 FE26 10A0F 10A38
+1D185 1D186 1D187 1D188 1D189 1D1AA 1D1AB 1D1AC 1D1AD 1D242 1D243 1D244
+'
+
+gfx_init() {
+	if (( IN_TMUX )); then
+		GFX_PRE=$'\ePtmux;\e\e_G' GFX_SUF=$'\e\e\\\e\\'
+		DSR=$'\ePtmux;\e\e[5n\e\\'
+	else
+		GFX_PRE=$'\e_G' GFX_SUF=$'\e\\'
+		DSR=$'\e[5n'
+	fi
+	local hex code mark
+	printf -v PH '\U0010EEEE'
+	DIA=()
+	for hex in $DIA_HEX; do
+		printf -v code '%08X' "0x$hex"
+		printf -v mark '%b' "\\U$code"
+		DIA+=("$mark")
+	done
+	# The image id travels in a color of the base palette, which every
+	# terminal setup keeps intact. The process id spreads the ids of two
+	# programs in one terminal.
+	ID_A=$(( 16 + $$ % 119 * 2 ))
+	ID_B=$(( ID_A + 1 ))
+}
+
+# Appends one graphics command to the frame.
+gfx_cmd() {
+	FRAME+="$GFX_PRE$1$GFX_SUF"
+}
+
+# Sets REPLY to the placeholder cells of image $1 at column $2, row $3,
+# for a box of $4 columns and $5 rows.
+placeholder_block() {
+	local id=$1 x=$2 y=$3 cols=$4 rows=$5 row tail=''
+	local out=''
+	# Only the first cell of a row carries its row and column. A cell with
+	# no marks continues the cell on its left, which halves the bytes.
+	repeat $(( cols - 1 )) "$PH"
+	tail=$REPLY
+	for (( row = 0; row < rows; row++ )); do
+		out+=$'\e['"$(( y + row ));${x}H$PH${DIA[row]}${DIA[0]}$tail"
+	done
+	REPLY=$'\e[38;5;'"${id}m$out"$'\e[39m'
+}
+
+# Handles one answer to a graphics command.
+gfx_reply() {
+	[[ $1 == Gi=1\;OK* ]] || return 0
+	[[ $GFX == unknown || $GFX == unsupported ]] || return 0
+	GFX=on
+	D_DETAILS=1
+	(( HS_PENDING )) || preview_restart
+}
+
+# Handles one status report from the terminal.
+ack_received() {
+	(( ACKS < PROBES )) && (( ACKS++ ))
+	ACK_SEEN=1 ACK_MISSES=0
+	if [[ $ACK_MODE == off ]] && (( ! HS_PENDING )); then
+		ACK_MODE=on ACKS=$PROBES TX_WIN=$WIN_START
+		(( TX_WIN > WIN_CAP )) && TX_WIN=$WIN_CAP
+		status 'the terminal answers again: flow control is on'
+	fi
+	return 0
+}
+
+# Without answers the program cannot see the link. It then sends at a fixed rate.
+ack_mode_off() {
+	ACK_MODE=off
+	TX_WIN=$(( RATE_BPS / 10 ))
+	(( TX_WIN < CHUNK )) && TX_WIN=$CHUNK
+	(( TX_WIN > WIN_CAP )) && TX_WIN=$WIN_CAP
+	human_size "$RATE_BPS"
+	status "the terminal does not answer: no flow control, sending $REPLY/s (--rate)"
+}
+
+# Adapts the window to the time that the last window needed.
+link_update() {
+	local dt=$1 drain next bps
+	(( dt < 1 )) && dt=1
+	(( RTT_MS == 0 || dt < RTT_MS )) && RTT_MS=$dt
+	bps=$(( TX_WIN_SENT * 1000 / dt ))
+	LINK_BPS=$(( LINK_BPS ? (LINK_BPS * 3 + bps) / 4 : bps ))
+	# A short last window says little about the link.
+	(( TX_WIN_SENT * 2 < TX_WIN )) && return 0
+	drain=$(( dt - RTT_MS ))
+	(( drain < 1 )) && drain=1
+	next=$(( TX_WIN_SENT * WIN_TARGET_MS / drain ))
+	(( next > TX_WIN * 2 )) && next=$(( TX_WIN * 2 ))
+	(( next < TX_WIN / 2 )) && next=$(( TX_WIN / 2 ))
+	(( next < WIN_MIN )) && next=$WIN_MIN
+	(( next > WIN_CAP )) && next=$WIN_CAP
+	TX_WIN=$next
+	D_FOOTER=1
+}
+
+# Starts the transfer of the base64 file $1, which holds $2 bytes.
+tx_begin() {
+	tx_abort
+	[[ -r $1 ]] || return 1
+	exec {TX_FD}< "$1"
+	# A later stage of the shown image keeps its id. The terminal then
+	# replaces the picture in place, and the cells stay as they are.
+	if (( SHOWN_ID && STAGE_DONE > 0 )); then
+		TX_ID=$SHOWN_ID
+	elif (( SHOWN_ID == ID_A )); then
+		TX_ID=$ID_B
+	else
+		TX_ID=$ID_A
+	fi
+	TX_ACTIVE=1 TX_STARTED=0 TX_EOF=0 TX_WAIT=0 TX_PAUSED=0
+	TX_TOTAL=$2 TX_SENT=0 TX_WIN_SENT=0
+	# In fixed-rate mode one question at the start finds a terminal that answers again.
+	if [[ $ACK_MODE == off ]] && pane_focused; then
+		printf '%s' "$DSR"
+		(( PROBES++ ))
+	fi
+	D_DETAILS=1
+}
+
+# Stops the transfer. An empty last chunk ends the open command, so the
+# terminal drops the partial image.
+tx_abort() {
+	(( TX_ACTIVE )) || return 0
+	exec {TX_FD}<&-
+	local out=
+	(( TX_STARTED && ! TX_EOF )) && out+="${GFX_PRE}q=2,m=0;${GFX_SUF}"
+	(( TX_STARTED && TX_ID != SHOWN_ID )) && out+="${GFX_PRE}q=2,a=d,d=I,i=${TX_ID}${GFX_SUF}"
+	printf '%s' "$out"
+	TX_ACTIVE=0 TX_WAIT=0 TX_PAUSED=0
+	D_DETAILS=1
+}
+
+# Returns success when the window in flight has left the link.
+tx_window_released() {
+	now_ms
+	if [[ $ACK_MODE == on ]]; then
+		if (( ACKS >= TX_NEED )); then
+			link_update $(( NOW - TX_WIN_AT ))
+		elif (( NOW - TX_PROBE_AT < ACK_TIMEOUT_MS )); then
+			return 1
+		else
+			# The answer is lost. Count it as received so the next wait starts clean.
+			ACKS=$PROBES
+			(( ! ACK_SEEN || ++ACK_MISSES >= 3 )) && ack_mode_off
+		fi
+	elif (( (NOW - TX_WIN_AT) * RATE_BPS < TX_WIN_SENT * 1000 )); then
+		return 1
+	fi
+	TX_WAIT=0 TX_WIN_SENT=0 D_DETAILS=1
+	return 0
+}
+
+# Sends the next part of the image. It returns after one burst at most.
+tx_pump() {
+	(( TX_ACTIVE )) || return 0
+	if (( TX_WAIT )); then
+		tx_window_released || return 0
+	fi
+	if (( TX_EOF )); then
+		tx_done
+		return 0
+	fi
+	if ! pane_focused; then
+		(( TX_PAUSED )) || D_DETAILS=1
+		TX_PAUSED=1
+		return 0
+	fi
+	(( TX_PAUSED )) && D_DETAILS=1
+	TX_PAUSED=0
+
+	local budget=$(( TX_WIN - TX_WIN_SENT )) burst=$BURST chunk ctrl more out='' n
+	if (( TX_WIN_SENT == 0 )); then
+		now_ms
+		TX_WIN_AT=$NOW
+	fi
+	while (( budget > 0 && burst > 0 && ! TX_EOF )); do
+		IFS= read -r -N "$CHUNK" -u "$TX_FD" chunk || TX_EOF=1
+		more=$(( ! TX_EOF ))
+		if (( TX_STARTED )); then
+			ctrl="q=2,m=$more"
+		else
+			ctrl="q=2,a=T,U=1,f=100,i=$TX_ID,c=$BOX_C,r=$BOX_R,m=$more"
+			TX_STARTED=1
+		fi
+		out+="$GFX_PRE$ctrl;$chunk$GFX_SUF"
+		n=${#chunk}
+		(( budget -= n, burst -= n, TX_SENT += n, TX_WIN_SENT += n ))
+	done
+	if (( TX_EOF || budget <= 0 )); then
+		if [[ $ACK_MODE == on ]]; then
+			out+=$DSR
+			(( PROBES++ ))
+			TX_NEED=$PROBES
+		fi
+		TX_WAIT=1
+		now_ms
+		TX_PROBE_AT=$NOW
+	fi
+	printf '%s' "$out"
+}
+
+# The whole image is in the terminal: show it.
+tx_done() {
+	exec {TX_FD}<&-
+	TX_ACTIVE=0
+	STAGE_DONE=$TX_STAGE
+	D_DETAILS=1
+	(( TX_ID == SHOWN_ID )) && return 0
+	placeholder_block "$TX_ID" "$BOX_X" "$BOX_Y" "$BOX_C" "$BOX_R"
+	OLD_ID=$SHOWN_ID
+	SHOWN_ID=$TX_ID SHOWN_PH=$REPLY
+	PV_KIND=image
+	D_PREVIEW=1
+}
+
+# Removes the shown image from the terminal.
+image_hide() {
+	(( SHOWN_ID )) || return 0
+	gfx_cmd "q=2,a=d,d=I,i=$SHOWN_ID"
+	SHOWN_ID=0 SHOWN_PH=
+}
+# bashfs: end graphics.bash
+# bashfs: begin preview.bash
+# The preview pipeline: selection, then job, then transfer, then picture.
+
+# The selection changed. Stops all work for the entry and starts the rest
+# timer for the new entry.
+preview_reset() {
+	tx_abort
+	job_kill
+	image_hide
+	JOB_INFO=() PV_TEXT=() PV_KIND=none PV_MSG=
+	GOT_INFO=0 GOT_TEXT=0 GOT_ERR=0 GOT_GEOM=0
+	STAGES=0 STAGE_DONE=0 TX_STAGE=0
+	now_ms
+	PENDING=1 PENDING_AT=$NOW
+	D_DETAILS=1 D_PREVIEW=1
+}
+
+# Starts the preview of the same entry again, for example after a resize.
+preview_restart() {
+	preview_reset
+}
+
+job_kill() {
+	if (( JOB_PID && ! JOB_FINISHED )); then
+		kill "$JOB_PID" 2>/dev/null
+	fi
+	JOB_DIR='' JOB_PID=0 JOB_KEY='' JOB_FINISHED=0
+}
+
+# Starts the job for the selected entry, or takes a finished job from the cache.
+job_start() {
+	PENDING=0
+	(( N > 0 )) || return 0
+	local name=${E_NAME[CUR]} kind=other
+	local path=${PWD%/}/$name
+	local -a args=()
+	case ${E_KIND[CUR]} in
+		d) kind='dir' ;;
+		f) kind='file' ;;
+	esac
+	if (( E_IMG[CUR] )); then
+		kind=image
+		local max_w=0 max_h=0
+		if [[ $GFX == on ]] && (( P_H > 0 )); then
+			stage_limit
+			max_w=$FIT_W max_h=$FIT_H
+		fi
+		args=("$max_w" "$max_h" "${E_SIZE[CUR]}")
+	fi
+
+	local key="$kind|$path|${E_MTIME[CUR]}|${E_SIZE[CUR]}|${args[*]}|$SHOW_HIDDEN"
+	JOB_FINISHED=0 JOB_PID=0
+	if [[ -n ${CACHE[$key]-} && -e ${CACHE[$key]}/done ]]; then
+		JOB_DIR=${CACHE[$key]} JOB_KEY=
+		return 0
+	fi
+	JOB_DIR=$RUN_DIR/job$(( ++JOB_SEQ )) JOB_KEY=$key
+	mkdir -p -- "$JOB_DIR" || { status 'cannot create a work directory'; JOB_DIR=; return 0; }
+	job_spawn "$kind" "$path" "$JOB_DIR" "${args[@]}"
+	if [[ $kind == image ]] && (( max_w > 0 )); then
+		PV_KIND=msg PV_MSG='loading…' D_PREVIEW=1
+	fi
+}
+
+# Keeps a finished job for the session. The oldest job leaves the cache first.
+cache_add() {
+	[[ -n $JOB_KEY ]] || return 0
+	CACHE[$JOB_KEY]=$JOB_DIR
+	CACHE_ORDER+=("$JOB_KEY")
+	JOB_KEY=
+	(( ${#CACHE_ORDER[@]} > CACHE_MAX )) || return 0
+	local old=${CACHE_ORDER[0]}
+	CACHE_ORDER=("${CACHE_ORDER[@]:1}")
+	rm -rf -- "${CACHE[$old]}"
+	unset 'CACHE[$old]'
+}
+
+# Picks up the result files that the job has published since the last look.
+job_poll() {
+	[[ -n $JOB_DIR ]] || return 0
+	local dir=$JOB_DIR
+	if (( ! GOT_INFO )) && [[ -e $dir/info ]]; then
+		mapfile -t JOB_INFO < "$dir/info"
+		GOT_INFO=1 D_DETAILS=1
+	fi
+	if (( ! GOT_TEXT )) && [[ -e $dir/text ]]; then
+		mapfile -t PV_TEXT < "$dir/text"
+		GOT_TEXT=1 PV_KIND=text D_PREVIEW=1
+	fi
+	if (( ! GOT_ERR )) && [[ -e $dir/err ]]; then
+		IFS= read -r PV_MSG < "$dir/err"
+		GOT_ERR=1 PV_KIND=error D_PREVIEW=1 D_DETAILS=1
+	fi
+	if (( ! GOT_GEOM )) && [[ -e $dir/geom ]]; then
+		read -r IMG_W IMG_H STAGES < "$dir/geom"
+		GOT_GEOM=1
+		box_compute
+	fi
+	if (( GOT_GEOM && ! TX_ACTIVE && STAGE_DONE < STAGES )) && [[ $GFX == on ]]; then
+		stage_send
+	fi
+	if (( ! JOB_FINISHED )) && [[ -e $dir/done ]]; then
+		JOB_FINISHED=1
+		cache_add
+	fi
+	return 0
+}
+
+# Starts the transfer of the next stage that is ready.
+stage_send() {
+	local dir=$JOB_DIR stage=$(( STAGE_DONE + 1 ))
+	# The draft stage only helps when the last stage needs a long time.
+	if (( stage < STAGES )) && [[ -e $dir/s$STAGES.b64 ]] && (( LINK_BPS > 0 )); then
+		local w h bytes
+		read -r w h bytes < "$dir/s$STAGES.dim"
+		(( bytes * 1000 / LINK_BPS < WIN_TARGET_MS * 2 )) && stage=$STAGES
+	fi
+	[[ -e $dir/s$stage.b64 ]] || return 0
+	read -r STAGE_W STAGE_H STAGE_BYTES < "$dir/s$stage.dim"
+	TX_STAGE=$stage
+	tx_begin "$dir/s$stage.b64" "$STAGE_BYTES"
+}
+
+# Sets REPLY to the text of the Preview line in the details.
+preview_status() {
+	REPLY=
+	(( N > 0 && E_IMG[CUR] )) || return 0
+	case $GFX in
+		off) REPLY='off (press i)'; return ;;
+		unsupported) REPLY='no graphics support in this terminal (press i to force)'; return ;;
+		unknown) REPLY='asking the terminal…'; return ;;
+	esac
+	if [[ $PV_KIND == error ]]; then
+		REPLY='failed'
+		return
+	fi
+	local label=draft size
+	(( TX_STAGE >= STAGES )) && label=${QUALITY_NAME[QUALITY]}
+	if (( TX_ACTIVE )); then
+		human_size "$TX_TOTAL"
+		size=$REPLY
+		REPLY="$label ${STAGE_W}×${STAGE_H} · $(( TX_TOTAL ? TX_SENT * 100 / TX_TOTAL : 0 ))% of $size"
+		(( TX_PAUSED )) && REPLY+=' · paused, pane not focused'
+		return
+	fi
+	if (( STAGE_DONE > 0 )); then
+		human_size "$STAGE_BYTES"
+		REPLY="$label ${STAGE_W}×${STAGE_H} · $REPLY"
+		(( STAGE_DONE < STAGES )) && REPLY+=' · refining…'
+		return
+	fi
+	(( PENDING )) || REPLY='rendering…'
+}
+
+# One step of the pipeline. The main loop calls it on every pass.
+preview_tick() {
+	handshake_tick
+	if (( PENDING )) && (( NOW - PENDING_AT >= DEBOUNCE_MS )); then
+		# An image job needs the answers of the terminal: graphics support and cell size.
+		if (( ! HS_PENDING && NOW >= CELL_WAIT_UNTIL )); then
+			job_start
+		fi
+	fi
+	tx_pump
+	job_poll
+}
+
+# Returns the read timeout for the main loop: zero while data can go out,
+# short while something is pending, long when idle.
+preview_timeout() {
+	if (( TX_ACTIVE && ! TX_WAIT && ! TX_PAUSED )); then
+		REPLY=0
+	elif (( PENDING || HS_PENDING || TX_PAUSED )) || { [[ -n $JOB_DIR ]] && (( ! JOB_FINISHED )); }; then
+		REPLY=$TICK_BUSY_S
+	elif (( TX_WAIT )) && [[ $ACK_MODE != on ]]; then
+		REPLY=$TICK_BUSY_S
+	else
+		REPLY=$TICK_IDLE_S
+	fi
+}
+# bashfs: end preview.bash
+# bashfs: begin draw.bash
+# Drawing. Every function appends to FRAME, and flush writes the frame once.
+# Each part of the screen has a dirty flag, so a key press sends few bytes.
+
+flush() {
+	[[ -n $FRAME ]] || return 0
+	# The terminal shows a synchronized update in one step.
+	printf '\e[?2026h%s\e[?2026l' "$FRAME"
+	FRAME=
+}
+
+# Appends a cursor move to row $1, column $2.
+at() {
+	FRAME+=$'\e['"$1;$2H"
+}
+
+# Erases the rectangle at column $1, row $2 with $3 columns and $4 rows.
+clear_rect() {
+	local row
+	for (( row = $2; row < $2 + $4; row++ )); do
+		FRAME+=$'\e['"$row;$1H"$'\e['"$3X"
+	done
+}
+
+draw_header() {
+	local path=$PWD width=$(( COLS - 2 ))
+	[[ $path == "$HOME" || $path == "$HOME"/* ]] && path="~${path#"$HOME"}"
+	(( ${#path} > width && width > 1 )) && path="…${path: -$(( width - 1 ))}"
+	fit "$path" "$width"
+	at 1 1
+	FRAME+="$S_BAR $REPLY $S_RESET"
+}
+
+draw_footer() {
+	local left right style=$S_DIM
+	if [[ $MODE == search ]]; then
+		left="/$SEARCH" style=
+	elif [[ -n $STATUS ]]; then
+		left=$STATUS style=$S_BOLD
+	else
+		left='j/k move  h/l dir  z zoom  +/- quality  / search  ? help  q quit'
+	fi
+	right="$(( N ? CUR + 1 : 0 ))/$N  $SORT  ${QUALITY_NAME[QUALITY]}"
+	if (( LINK_BPS )); then
+		human_size "$LINK_BPS"
+		right+="  $REPLY/s"
+	fi
+	(( ${#right} + 12 > COLS )) && right=
+	fit " $left" $(( COLS - ${#right} - 1 ))
+	at "$ROWS" 1
+	FRAME+="$style$REPLY$S_RESET$S_DIM$right $S_RESET"
+}
+
+# Draws the list row of entry $1 when that row is on the screen.
+draw_list_row() {
+	local i=$1
+	(( L_H > 0 && i >= TOP && i < TOP + L_H )) || return 0
+	at $(( L_Y + i - TOP )) "$L_X"
+	if (( i >= N )); then
+		fit '' "$L_W"
+		(( i == 0 )) && fit ' (empty)' "$L_W"
+		FRAME+="$S_DIM$REPLY$S_RESET"
+		return 0
+	fi
+	local name=${E_NAME[i]} style='' size='' line
+	case ${E_KIND[i]} in
+		d) name+=/ style=$S_DIR ;;
+		f)
+			(( E_IMG[i] )) || style=$S_DIM
+			human_size "${E_SIZE[i]}"
+			size=$REPLY
+			;;
+		*) style=$S_DIM ;;
+	esac
+	(( E_LINK[i] )) && style=$S_LINK
+	(( i == CUR )) && style=$S_SEL
+	if (( L_W >= 34 )); then
+		fit "$name" $(( L_W - 12 ))
+		printf -v line ' %s %9s ' "$REPLY" "$size"
+	else
+		fit "$name" $(( L_W - 2 ))
+		line=" $REPLY "
+	fi
+	FRAME+="$style$line$S_RESET"
+}
+
+draw_list() {
+	local i
+	for (( i = TOP; i < TOP + L_H; i++ )); do
+		draw_list_row "$i"
+	done
+}
+
+draw_separators() {
+	local row
+	FRAME+=$S_DIM
+	if (( SEP_COL )); then
+		for (( row = 2; row < ROWS; row++ )); do
+			at "$row" "$SEP_COL"
+			FRAME+='│'
+		done
+	fi
+	if (( SEP_ROW )); then
+		repeat "$COLS" '─'
+		at "$SEP_ROW" 1
+		FRAME+=$REPLY
+	fi
+	FRAME+=$S_RESET
+}
+
+# Builds DET, the lines of the details pane, as "Label<TAB>value".
+details_compose() {
+	DET=()
+	(( N > 0 )) || return 0
+	local when
+	human_size "${E_SIZE[CUR]}"
+	printf -v when '%(%Y-%m-%d %H:%M)T' "${E_MTIME[CUR]}"
+	DET+=("Name"$'\t'"${E_NAME[CUR]}" "File"$'\t'"$REPLY · $when")
+	(( ${#JOB_INFO[@]} )) && DET+=("${JOB_INFO[@]}")
+	preview_status
+	[[ -n $REPLY ]] || return 0
+	# The Preview line always shows. It takes the last row when the pane is full.
+	(( ${#DET[@]} >= D_H )) && DET=("${DET[@]:0:D_H-1}")
+	DET+=("Preview"$'\t'"$REPLY")
+}
+
+draw_details() {
+	(( D_H > 0 )) || return 0
+	details_compose
+	local i label
+	for (( i = 0; i < D_H; i++ )); do
+		at $(( D_Y + i )) "$D_X"
+		if (( i >= ${#DET[@]} )); then
+			FRAME+=$'\e['"${D_W}X"
+			continue
+		fi
+		printf -v label '%-8s' "${DET[i]%%$'\t'*}"
+		fit "${DET[i]#*$'\t'}" $(( D_W - 9 ))
+		FRAME+="$S_DIM$label$S_RESET $REPLY"
+	done
+}
+
+# Draws the preview pane. PV_PAINTED remembers what is on the screen. An
+# empty pane is not erased again and a new stage of an image replaces the
+# old stage without a blank moment.
+draw_preview() {
+	(( P_H > 0 )) || return 0
+	local want=$PV_KIND
+	[[ $want == image ]] && want="image $BOX_X $BOX_Y $BOX_C $BOX_R"
+	if [[ -n $PV_PAINTED && $PV_PAINTED != "$want" ]]; then
+		clear_rect "$P_X" "$P_Y" "$P_W" "$P_H"
+	fi
+	PV_PAINTED=
+	local i
+	case $PV_KIND in
+		text)
+			for (( i = 0; i < P_H && i < ${#PV_TEXT[@]}; i++ )); do
+				fit "${PV_TEXT[i]}" "$P_W"
+				at $(( P_Y + i )) "$P_X"
+				FRAME+="$S_DIM$REPLY$S_RESET"
+			done
+			PV_PAINTED=text
+			;;
+		msg | error)
+			local style=$S_DIM msg=$PV_MSG
+			[[ $PV_KIND == error ]] && style=$S_ERR
+			(( ${#msg} > P_W )) && msg="${msg:0:P_W-1}…"
+			at $(( P_Y + P_H / 2 )) $(( P_X + (P_W - ${#msg}) / 2 ))
+			FRAME+="$style$msg$S_RESET"
+			PV_PAINTED=$PV_KIND
+			;;
+		image)
+			if (( SHOWN_ID )); then
+				FRAME+=$SHOWN_PH
+				PV_PAINTED=$want
+			fi
+			;;
+	esac
+	if (( OLD_ID )); then
+		gfx_cmd "q=2,a=d,d=I,i=$OLD_ID"
+		OLD_ID=0
+	fi
+}
+
+draw_help() {
+	local -a lines=(
+		'j k  ↓ ↑        move the selection'
+		'g G  Home End   first, last entry'
+		'PgDn PgUp  ^D ^U  page, half page'
+		'l →  Enter      open a directory, zoom an image'
+		'h ←  Backspace  parent directory'
+		'~               home directory'
+		'z  Tab          zoom: the preview fills the window'
+		'+ -             preview quality (draft, normal, fine, full)'
+		'i               image previews on or off'
+		'/  n N          search, next match, previous match'
+		's               sort by name, time, size'
+		'.               show hidden files'
+		'r  ^L           load again, draw again'
+		'q               quit'
+	)
+	local width=58 height=$(( ${#lines[@]} + 2 )) i
+	(( width > COLS - 2 )) && width=$(( COLS - 2 ))
+	local x=$(( (COLS - width) / 2 + 1 )) y=$(( (ROWS - height) / 2 + 1 ))
+	(( y < 1 )) && y=1
+	for (( i = 0; i < height && y + i <= ROWS; i++ )); do
+		at $(( y + i )) "$x"
+		if (( i == 0 )); then
+			fit " $PROG $VERSION: keys" "$width"
+			FRAME+="$S_BAR$REPLY$S_RESET"
+		elif (( i == height - 1 )); then
+			fit ' press a key to close' "$width"
+			FRAME+="$S_BAR$REPLY$S_RESET"
+		else
+			fit "  ${lines[i-1]}" "$width"
+			FRAME+=$REPLY
+		fi
+	done
+}
+
+# Draws what the dirty flags name, then writes the frame.
+render() {
+	if (( TOO_SMALL )); then
+		if (( D_ALL )); then
+			FRAME+=$'\e[2J\e[1;1H'"$PROG: window too small"
+			D_ALL=0
+		fi
+		flush
+		return
+	fi
+	if (( D_ALL )); then
+		FRAME+=$'\e[0m\e[2J'
+		PV_PAINTED=
+		D_HEADER=1 D_LIST=1 D_DETAILS=1 D_PREVIEW=1 D_FOOTER=1
+		draw_separators
+	fi
+	(( D_HEADER )) && draw_header
+	if (( D_LIST )); then
+		draw_list
+	else
+		local row
+		for row in "${DIRTY_ROWS[@]}"; do
+			draw_list_row "$row"
+		done
+	fi
+	(( D_DETAILS )) && draw_details
+	(( D_PREVIEW )) && draw_preview
+	(( D_FOOTER )) && draw_footer
+	if (( D_ALL )) && [[ $MODE == help ]]; then
+		draw_help
+	fi
+	D_ALL=0 D_HEADER=0 D_LIST=0 D_DETAILS=0 D_PREVIEW=0 D_FOOTER=0
+	DIRTY_ROWS=()
+	flush
+}
+# bashfs: end draw.bash
+# bashfs: begin input.bash
+# Keyboard input. The answers of the terminal arrive on the same stream.
+
+# Reads one key with the timeout $1, in seconds. Sets KEY, which stays empty
+# for input that is not a key. Fails when no input arrived in time.
+read_key() {
+	local c
+	KEY=
+	IFS= read -rsN1 -t "$1" c
+	local rc=$?
+	if (( rc > 128 )); then
+		return 1
+	elif (( rc != 0 )); then
+		# End of input: the terminal is gone.
+		RUNNING=0
+		return 1
+	fi
+	case $c in
+		$'\e') read_escape ;;
+		$'\n' | $'\r') KEY=ENTER ;;
+		$'\x7f' | $'\b') KEY=BS ;;
+		$'\t') KEY=TAB ;;
+		*) KEY=$c ;;
+	esac
+	return 0
+}
+
+read_escape() {
+	local c seq=''
+	if ! IFS= read -rsN1 -t "$ESC_WAIT_S" c; then
+		KEY=ESC
+		return
+	fi
+	case $c in
+		'[')
+			# A control sequence ends at the first byte from "@" to "~".
+			while IFS= read -rsN1 -t "$ESC_WAIT_S" c; do
+				[[ $c == [@-~] ]] && break
+				seq+=$c
+				(( ${#seq} > 32 )) && break
+			done
+			csi_dispatch "$seq" "$c"
+			;;
+		O)
+			IFS= read -rsN1 -t "$ESC_WAIT_S" c || return
+			csi_dispatch '' "$c"
+			;;
+		_ | P | ']' | '^')
+			read_string "$c"
+			;;
+	esac
+}
+
+# Consumes a string sequence up to its terminator. $1 is the introducer.
+read_string() {
+	local c prev='' body=''
+	while IFS= read -rsN1 -t "$ESC_WAIT_S" c; do
+		[[ $c == $'\a' ]] && break
+		if [[ $prev == $'\e' && $c == $'\\' ]]; then
+			body=${body%$'\e'}
+			break
+		fi
+		body+=$c prev=$c
+		(( ${#body} > 256 )) && break
+	done
+	[[ $1 == _ ]] && gfx_reply "$body"
+	return 0
+}
+
+# Maps a control sequence to a key name or to an answer handler.
+csi_dispatch() {
+	local params=$1 final=$2
+	case $final in
+		A) KEY=UP ;;
+		B) KEY=DOWN ;;
+		C) KEY=RIGHT ;;
+		D) KEY=LEFT ;;
+		H) KEY=HOME ;;
+		F) KEY=END ;;
+		'~')
+			case ${params%%;*} in
+				1 | 7) KEY=HOME ;;
+				4 | 8) KEY=END ;;
+				5) KEY=PGUP ;;
+				6) KEY=PGDN ;;
+			esac
+			;;
+		n) [[ $params == 0 ]] && ack_received ;;
+		t) [[ $params == 6\;* ]] && cell_reply "$params" ;;
+	esac
+	return 0
+}
+
+search_key() {
+	case $1 in
+		ENTER)
+			MODE=normal
+			;;
+		ESC)
+			MODE=normal
+			select_index "$SEARCH_FROM"
+			;;
+		BS)
+			if [[ -z $SEARCH ]]; then
+				MODE=normal
+			else
+				SEARCH=${SEARCH%?}
+				search_jump 1 "$SEARCH_FROM"
+			fi
+			;;
+		?)
+			SEARCH+=$1
+			search_jump 1 "$SEARCH_FROM" || status "no match for: $SEARCH"
+			;;
+	esac
+	D_FOOTER=1
+}
+
+quality_step() {
+	local q=$(( QUALITY + $1 ))
+	(( q < 1 || q >= ${#QUALITY_NAME[@]} )) && return 0
+	QUALITY=$q
+	status "preview quality: ${QUALITY_NAME[QUALITY]}"
+	preview_restart
+}
+
+images_toggle() {
+	case $GFX in
+		on)
+			GFX=off
+			status 'image previews: off'
+			;;
+		unknown)
+			return 0
+			;;
+		*)
+			# A terminal that gave no answer before is asked again.
+			if [[ $GFX == off && $ACK_MODE == unknown ]]; then
+				GFX=unknown
+				handshake_send
+			else
+				GFX=on
+			fi
+			status 'image previews: on'
+			;;
+	esac
+	preview_restart
+}
+
+handle_key() {
+	local key=$1 page=$(( ROWS - 3 ))
+	(( page < 1 )) && page=1
+	case $MODE in
+		help)
+			MODE=normal D_ALL=1
+			return
+			;;
+		search)
+			search_key "$key"
+			return
+			;;
+	esac
+	if [[ -n $STATUS ]]; then
+		STATUS='' D_FOOTER=1
+	fi
+	case $key in
+		q) RUNNING=0 ;;
+		j | DOWN) select_index $(( CUR + 1 )) ;;
+		k | UP) select_index $(( CUR - 1 )) ;;
+		g | HOME) select_index 0 ;;
+		G | END) select_index $(( N - 1 )) ;;
+		PGDN | $'\x06' | ' ') select_index $(( CUR + page )) ;;
+		PGUP | $'\x02') select_index $(( CUR - page )) ;;
+		$'\x04') select_index $(( CUR + page / 2 )) ;;
+		$'\x15') select_index $(( CUR - page / 2 )) ;;
+		l | RIGHT | ENTER) open_selection ;;
+		h | LEFT | BS) dir_change .. "${PWD##*/}" ;;
+		'~') dir_change "$HOME" ;;
+		z | TAB) zoom_toggle ;;
+		+ | =) quality_step 1 ;;
+		- | _) quality_step -1 ;;
+		i) images_toggle ;;
+		.)
+			SHOW_HIDDEN=$(( ! SHOW_HIDDEN ))
+			dir_reload
+			;;
+		s)
+			case $SORT in
+				name) SORT='time' ;;
+				time) SORT='size' ;;
+				*) SORT='name' ;;
+			esac
+			dir_reload
+			;;
+		r) dir_reload ;;
+		$'\x0c')
+			D_ALL=1
+			preview_restart
+			;;
+		/)
+			MODE=search SEARCH='' SEARCH_FROM=$CUR D_FOOTER=1
+			;;
+		n) search_jump 1 $(( CUR + 1 )) || status 'no match' ;;
+		N) search_jump -1 $(( CUR - 1 )) || status 'no match' ;;
+		'?')
+			MODE=help D_ALL=1
+			;;
+	esac
+	return 0
+}
+# bashfs: end input.bash
+# bashfs: begin main.bash
+# Start-up, the main loop, and shutdown.
+
+usage() {
+	cat <<EOF
+$PROG $VERSION - terminal file browser with image previews
+
+Usage: $PROG [options] [directory | file]
+
+Options:
+  -a, --all            show hidden files
+  -n, --no-images      start with image previews off
+  -q, --quality LEVEL  preview quality: draft, normal, fine, full (default: normal)
+      --rate KIB       send rate in KiB/s when the terminal gives no answers (default: 128)
+  -h, --help           show this text
+  -V, --version        show the version
+
+Image previews need a terminal with the kitty graphics protocol (Ghostty, kitty).
+They work inside tmux. ffmpeg decodes the images. Without ffmpeg only PNG files
+have a preview. Press ? in the program for the keys.
+EOF
+}
+
+parse_args() {
+	local arg i
+	while (( $# )); do
+		arg=$1
+		shift
+		case $arg in
+			-a | --all) SHOW_HIDDEN=1 ;;
+			-n | --no-images) GFX=off ;;
+			-q | --quality)
+				(( $# )) || die "$arg needs a value"
+				QUALITY=0
+				for (( i = 1; i < ${#QUALITY_NAME[@]}; i++ )); do
+					[[ $1 == "${QUALITY_NAME[i]}" || $1 == "$i" ]] && QUALITY=$i
+				done
+				(( QUALITY )) || die "unknown quality: $1 (use draft, normal, fine or full)"
+				shift
+				;;
+			--rate)
+				(( $# )) || die "$arg needs a value"
+				if [[ $1 != +([0-9]) ]] || (( $1 < 1 )); then
+					die "--rate needs a positive number of KiB/s, not: $1"
+				fi
+				RATE_BPS=$(( $1 * 1024 ))
+				shift
+				;;
+			-h | --help)
+				usage
+				exit 0
+				;;
+			-V | --version)
+				printf '%s %s\n' "$PROG" "$VERSION"
+				exit 0
+				;;
+			--)
+				(( $# )) && START_PATH=$1
+				(( $# > 1 )) && die 'too many arguments'
+				return 0
+				;;
+			-*) die "unknown option: $arg (see --help)" ;;
+			*)
+				[[ $START_PATH == . ]] || die 'too many arguments'
+				START_PATH=$arg
+				;;
+		esac
+	done
+}
+
+cleanup() {
+	trap - EXIT
+	if (( TERM_READY )); then
+		tx_abort
+		printf '%s' "${GFX_PRE}q=2,a=d,d=I,i=${ID_A}${GFX_SUF}${GFX_PRE}q=2,a=d,d=I,i=${ID_B}${GFX_SUF}"
+		term_restore
+	fi
+	job_kill
+	tmux_restore
+	[[ -n $RUN_DIR ]] && rm -rf -- "$RUN_DIR"
+	return 0
+}
+
+on_resize() {
+	RESIZED=0
+	layout
+	scroll_fix
+	D_ALL=1
+	now_ms
+	[[ $GFX == on ]] && cell_query
+	preview_restart
+}
+
+main() {
+	(( BASH_VERSINFO[0] >= 5 )) || die 'bash 5 or later is needed'
+	state_init
+	parse_args "$@"
+
+	local start_name=
+	if [[ -d $START_PATH ]]; then
+		cd -- "$START_PATH" || die "cannot open $START_PATH"
+	elif [[ -e $START_PATH ]]; then
+		start_name=${START_PATH##*/}
+		[[ $START_PATH == */* ]] && { cd -- "${START_PATH%/*}/" || die "cannot open ${START_PATH%/*}"; }
+	else
+		die "no such file or directory: $START_PATH"
+	fi
+	[[ -t 0 && -t 1 ]] || die 'needs a terminal on standard input and output'
+
+	# Text width and the placeholder characters need a UTF-8 locale.
+	case ${LC_ALL:-${LC_CTYPE:-${LANG-}}} in
+		*[Uu][Tt][Ff]-8 | *[Uu][Tt][Ff]8) ;;
+		*) export LC_ALL=C.UTF-8 ;;
+	esac
+
+	command -v ffmpeg >/dev/null && HAVE_FFMPEG=1
+	command -v ffprobe >/dev/null && HAVE_FFPROBE=1
+	command -v file >/dev/null && HAVE_FILE=1
+	[[ -n ${TMUX-} && -n ${TMUX_PANE-} ]] && IN_TMUX=1
+
+	RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/$PROG.XXXXXX") || die 'cannot create a work directory'
+	trap cleanup EXIT
+	trap 'exit 130' INT
+	trap 'exit 143' TERM HUP
+	trap 'RESIZED=1' WINCH
+
+	gfx_init
+	if (( IN_TMUX )) && [[ $GFX != off ]]; then
+		tmux_setup
+	fi
+	term_init
+	layout
+	dir_load
+	dir_find "$start_name"
+	CUR=$REPLY
+	scroll_fix
+	now_ms
+	[[ $GFX == off ]] || handshake_send
+	(( HAVE_FFMPEG )) || [[ $GFX == off ]] || status 'ffmpeg is not installed: only PNG files have a preview'
+	preview_reset
+	render
+
+	local drained
+	while (( RUNNING )); do
+		preview_timeout
+		if [[ $REPLY == 0 ]]; then
+			read -t 0 && read_key "$ESC_WAIT_S" && [[ -n $KEY ]] && handle_key "$KEY"
+		else
+			read_key "$REPLY" && [[ -n $KEY ]] && handle_key "$KEY"
+		fi
+		# Handle all keys that wait before one redraw.
+		drained=0
+		while (( RUNNING && drained++ < 64 )) && read -t 0; do
+			read_key "$ESC_WAIT_S" && [[ -n $KEY ]] && handle_key "$KEY"
+		done
+		now_ms
+		(( RESIZED )) && on_resize
+		if [[ -n $STATUS ]] && (( NOW - STATUS_AT > STATUS_MS )); then
+			STATUS='' D_FOOTER=1
+		fi
+		preview_tick
+		render
+	done
+}
+# bashfs: end main.bash
+
+main "$@"

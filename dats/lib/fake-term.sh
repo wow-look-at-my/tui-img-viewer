@@ -4,11 +4,11 @@ set -o nounset
 export LC_ALL=C
 
 dir=$1 rate=$2 cols=$3 rows=$4 command=$5
-start=${EPOCHREALTIME/[.,]/}
 
+# Appends an event with the wall clock in milliseconds.
 stamp() {
 	local now=${EPOCHREALTIME/[.,]/}
-	printf '%d %s\n' $(( (now - start) / 1000 )) "$*" >> "$dir/events"
+	printf '%d %s\n' $(( now / 1000 )) "$*" >> "$dir/events"
 }
 
 # Copies standard input to standard output at the rate limit.
