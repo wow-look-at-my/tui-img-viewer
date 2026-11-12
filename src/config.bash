@@ -11,7 +11,8 @@ readonly DEBOUNCE_MS=120      # the selection must rest this long before a job s
 readonly HANDSHAKE_MS=3000    # wait this long for the terminal to answer the first queries
 readonly ACK_TIMEOUT_MS=4000  # wait this long for one acknowledgement
 readonly RETRY_MS=1000        # pause before an image that tmux dropped goes out again
-readonly STATUS_MS=5000       # a status message stays this long in the footer
+readonly CHECK_MS=1500        # watch tmux for a loss this long after the last byte of an image
+readonly STATUS_MS=5000      # a status message stays this long in the footer
 readonly FOCUS_CACHE_MS=300   # ask tmux about the pane focus at most this often
 
 # Transfer of image data.
@@ -91,5 +92,6 @@ state_init() {
 	FOCUS_AT=-100000 FOCUS_OK=0
 	TX_ACTIVE=0 TX_FD=0 TX_ID=0 TX_STARTED=0 TX_EOF=0 TX_WAIT=0 TX_PAUSED=0
 	TX_TOTAL=0 TX_SENT=0 TX_WIN=$WIN_START
+	RATE_NOW=0 TX_DISCARDED=0 TX_CHECK_UNTIL=0 TX_CHECK_AT=0 TMUX_TAKEN=0 TMUX_DISCARDED=0
 	TX_BASE=-1 TX_LOST=0 TX_RETRY_AT=0 TX_WIN_SENT=0 TX_WIN_AT=0 TX_PROBE_AT=0 TX_NEED=0
 }

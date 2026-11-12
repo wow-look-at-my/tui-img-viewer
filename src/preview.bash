@@ -165,6 +165,7 @@ preview_tick() {
 		fi
 	fi
 	tx_pump
+	tx_check
 	job_poll
 }
 

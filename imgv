@@ -18,7 +18,8 @@ readonly DEBOUNCE_MS=120      # the selection must rest this long before a job s
 readonly HANDSHAKE_MS=3000    # wait this long for the terminal to answer the first queries
 readonly ACK_TIMEOUT_MS=4000  # wait this long for one acknowledgement
 readonly RETRY_MS=1000        # pause before an image that tmux dropped goes out again
-readonly STATUS_MS=5000       # a status message stays this long in the footer
+readonly CHECK_MS=1500        # watch tmux for a loss this long after the last byte of an image
+readonly STATUS_MS=5000      # a status message stays this long in the footer
 readonly FOCUS_CACHE_MS=300   # ask tmux about the pane focus at most this often
 
 # Transfer of image data.
@@ -98,6 +99,7 @@ state_init() {
 	FOCUS_AT=-100000 FOCUS_OK=0
 	TX_ACTIVE=0 TX_FD=0 TX_ID=0 TX_STARTED=0 TX_EOF=0 TX_WAIT=0 TX_PAUSED=0
 	TX_TOTAL=0 TX_SENT=0 TX_WIN=$WIN_START
+	RATE_NOW=0 TX_DISCARDED=0 TX_CHECK_UNTIL=0 TX_CHECK_AT=0 TMUX_TAKEN=0 TMUX_DISCARDED=0
 	TX_BASE=-1 TX_LOST=0 TX_RETRY_AT=0 TX_WIN_SENT=0 TX_WIN_AT=0 TX_PROBE_AT=0 TX_NEED=0
 }
 # bashfs: end config.bash
@@ -1826,28 +1828,66 @@ ack_received() {
 # Without answers the program cannot see the link. It then sends at a fixed rate.
 ack_mode_off() {
 	ACK_MODE=off
-	TX_WIN=$(( RATE_BPS / 10 ))
-	(( TX_WIN < CHUNK )) && TX_WIN=$CHUNK
-	(( TX_WIN > WIN_CAP )) && TX_WIN=$WIN_CAP
-	human_size "$RATE_BPS"
+	(( RATE_NOW )) || RATE_NOW=$RATE_BPS
+	rate_window
+	human_size "$RATE_NOW"
 	status "the terminal does not answer: no flow control, sending $REPLY/s (--rate)"
 }
 
-# Sets REPLY to the count of bytes that tmux has queued for its client.
-# tmux counts a byte when it takes it, not when the client reads it.
-tmux_queued() {
-	(( IN_TMUX )) || return 1
-	REPLY=$(tmux display-message -p -t "$TMUX_PANE" '#{client_written}' 2>/dev/null) || return 1
-	[[ $REPLY == +([0-9]) ]]
+# Sets the window of the fixed-rate mode: a tenth of a second of data.
+rate_window() {
+	TX_WIN=$(( RATE_NOW / 10 ))
+	(( TX_WIN < CHUNK )) && TX_WIN=$CHUNK
+	(( TX_WIN > WIN_CAP )) && TX_WIN=$WIN_CAP
 }
 
-# tmux drops image data, and reports nothing, while a redraw of the pane
-# waits behind queued output. Succeeds when tmux took less than this image
-# has sent, which shows such a drop.
+# Sets TMUX_TAKEN and TMUX_DISCARDED to two byte counts of the tmux client.
+# tmux counts a byte as taken when it queues it, not when the client reads
+# it. It counts a byte as discarded when it empties a queue that grew too long.
+tmux_counters() {
+	(( IN_TMUX )) || return 1
+	local reply
+	reply=$(tmux display-message -p -t "$TMUX_PANE" '#{client_written}:#{client_discarded}' 2>/dev/null) || return 1
+	[[ $reply == +([0-9]):+([0-9]) ]] || return 1
+	TMUX_TAKEN=${reply%:*} TMUX_DISCARDED=${reply#*:}
+}
+
+# tmux loses image data in two ways, and reports neither to the program.
+# It empties its queue when the link is slower than the send rate. It also
+# drops data while a redraw of the pane waits behind queued output.
+# Succeeds when the counters show a loss. The first kind sets TX_LOST at once.
 tmux_dropped() {
 	(( TX_BASE >= 0 )) || return 1
-	tmux_queued || return 1
-	(( REPLY - TX_BASE < TX_SENT ))
+	tmux_counters || return 1
+	if (( TMUX_DISCARDED > TX_DISCARDED )); then
+		TX_LOST=1
+		return 0
+	fi
+	(( TMUX_TAKEN - TX_BASE < TX_SENT ))
+}
+
+# After a loss the whole image goes out again, at half the rate.
+tx_lost() {
+	tx_abort
+	(( RATE_NOW /= 2 ))
+	(( RATE_NOW < WIN_MIN )) && RATE_NOW=$WIN_MIN
+	rate_window
+	now_ms
+	STAGE_DONE=0 TX_LOST=0 TX_CHECK_UNTIL=0
+	TX_RETRY_AT=$(( NOW + RETRY_MS ))
+	human_size "$RATE_NOW"
+	status "tmux dropped image data: sending the image again at $REPLY/s"
+}
+
+# The queue of tmux can still overflow a moment after the last byte went
+# out. This check finds that loss.
+tx_check() {
+	(( TX_CHECK_UNTIL )) || return 0
+	(( NOW - TX_CHECK_AT >= 200 )) || return 0
+	TX_CHECK_AT=$NOW
+	(( NOW >= TX_CHECK_UNTIL )) && TX_CHECK_UNTIL=0
+	tmux_dropped && (( TX_LOST )) && tx_lost
+	return 0
 }
 
 # Adapts the window to the time that the last window needed.
@@ -1891,9 +1931,12 @@ tx_begin() {
 		printf '%s' "$DSR"
 		(( PROBES++ ))
 	fi
-	TX_BASE=-1 TX_LOST=0
-	if [[ $ACK_MODE == off ]] && tmux_queued; then
-		TX_BASE=$REPLY
+	TX_BASE=-1 TX_LOST=0 TX_CHECK_UNTIL=0
+	if [[ $ACK_MODE == off ]] && tmux_counters; then
+		TX_BASE=$TMUX_TAKEN
+		# A later stage keeps the count of the first one, so a loss
+		# between two stages still shows.
+		(( STAGE_DONE > 0 )) || TX_DISCARDED=$TMUX_DISCARDED
 	fi
 	D_DETAILS=1
 }
@@ -1924,10 +1967,11 @@ tx_window_released() {
 			ACKS=$PROBES
 			(( ! ACK_SEEN || ++ACK_MISSES >= 3 )) && ack_mode_off
 		fi
-	elif (( (NOW - TX_WIN_AT) * RATE_BPS < TX_WIN_SENT * 1000 )); then
+	elif (( (NOW - TX_WIN_AT) * RATE_NOW < TX_WIN_SENT * 1000 )); then
 		return 1
 	elif tmux_dropped; then
-		# tmux can be a moment behind, so the verdict waits a little.
+		# tmux can be a moment behind with its count of taken bytes, so
+		# that verdict waits a little.
 		(( NOW - TX_PROBE_AT > 500 )) && TX_LOST=1
 		return 1
 	fi
@@ -1943,11 +1987,7 @@ tx_pump() {
 	(( TX_ACTIVE )) || return 0
 	if (( TX_WAIT )); then
 		if ! tx_window_released; then
-			(( TX_LOST )) || return 0
-			# The stage stays open, so the pipeline sends it again.
-			tx_abort
-			TX_RETRY_AT=$(( NOW + RETRY_MS ))
-			status 'tmux dropped image data during a redraw: sending the image again'
+			(( TX_LOST )) && tx_lost
 			return 0
 		fi
 	fi
@@ -2001,6 +2041,7 @@ tx_done() {
 	TX_ACTIVE=0
 	STAGE_DONE=$TX_STAGE
 	D_DETAILS=1
+	(( TX_BASE >= 0 )) && TX_CHECK_UNTIL=$(( NOW + CHECK_MS ))
 	(( TX_ID == SHOWN_ID )) && return 0
 	placeholder_block "$TX_ID" "$BOX_X" "$BOX_Y" "$BOX_C" "$BOX_R"
 	OLD_ID=$SHOWN_ID
@@ -2184,6 +2225,7 @@ preview_tick() {
 		fi
 	fi
 	tx_pump
+	tx_check
 	job_poll
 }
 
