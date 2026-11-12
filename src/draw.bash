@@ -221,7 +221,8 @@ draw_help() {
 render() {
 	if (( TOO_SMALL )); then
 		if (( D_ALL )); then
-			FRAME+=$'\e[2J\e[1;1H'"$PROG: window too small"
+			fit 'window too small' "$COLS"
+			FRAME+=$'\e[2J\e[1;1H'"$REPLY"
 			D_ALL=0
 		fi
 		flush

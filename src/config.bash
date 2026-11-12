@@ -30,7 +30,7 @@ readonly MAX_UPSCALE=4           # a small image grows by this factor at most
 readonly CACHE_MAX=48            # finished preview jobs kept for the session
 readonly TEXT_LINES=200          # lines of a text or directory preview
 readonly WIDE_MIN_COLS=72        # below this width the panes stack
-readonly DETAIL_ROWS=8
+readonly DETAIL_ROWS=10
 
 # Styles. Only attributes and the base colors, so the terminal theme decides the look.
 readonly S_RESET=$'\e[0m'

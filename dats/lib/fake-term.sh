@@ -47,7 +47,7 @@ sequence() {
 			ctrl=${ctrl#_G}
 			stamp gfx "$ctrl" "${#payload}"
 			if [[ $ctrl == *a=q* ]]; then
-				[[ -n ${FAKE_MUTE-}${FAKE_NO_GRAPHICS-} ]] || printf '\e_Gi=1;OK\e\\'
+				[[ -n ${FAKE_MUTE-}${FAKE_NO_GRAPHICS-} ]] || printf '\033_Gi=1;OK\033\134'
 			elif [[ $ctrl == *a=T* ]]; then
 				(( image++ ))
 				open=1
@@ -94,6 +94,8 @@ respond() {
 mkfifo "$dir/in"
 : > "$dir/events"
 # The pseudo terminal starts with no size, so the command sets one first.
+# The named pipe carries the answers back to the command on purpose.
+# shellcheck disable=SC2094
 script -qfec "stty rows $rows cols $cols; $command" /dev/null < "$dir/in" 2>/dev/null |
 	throttle |
 	tee "$dir/stream" |
