@@ -25,7 +25,7 @@ read_key() {
 }
 
 read_escape() {
-	local c seq=
+	local c seq=''
 	if ! IFS= read -rsN1 -t "$ESC_WAIT_S" c; then
 		KEY=ESC
 		return
@@ -52,10 +52,10 @@ read_escape() {
 
 # Consumes a string sequence up to its terminator. $1 is the introducer.
 read_string() {
-	local c prev= body=
+	local c prev='' body=''
 	while IFS= read -rsN1 -t "$ESC_WAIT_S" c; do
 		[[ $c == $'\a' ]] && break
-		if [[ $prev == $'\e' && $c == '\' ]]; then
+		if [[ $prev == $'\e' && $c == $'\\' ]]; then
 			body=${body%$'\e'}
 			break
 		fi
@@ -160,7 +160,7 @@ handle_key() {
 			;;
 	esac
 	if [[ -n $STATUS ]]; then
-		STATUS= D_FOOTER=1
+		STATUS='' D_FOOTER=1
 	fi
 	case $key in
 		q) RUNNING=0 ;;
@@ -185,9 +185,9 @@ handle_key() {
 			;;
 		s)
 			case $SORT in
-				name) SORT=time ;;
-				time) SORT=size ;;
-				*) SORT=name ;;
+				name) SORT='time' ;;
+				time) SORT='size' ;;
+				*) SORT='name' ;;
 			esac
 			dir_reload
 			;;
@@ -197,7 +197,7 @@ handle_key() {
 			preview_restart
 			;;
 		/)
-			MODE=search SEARCH= SEARCH_FROM=$CUR D_FOOTER=1
+			MODE=search SEARCH='' SEARCH_FROM=$CUR D_FOOTER=1
 			;;
 		n) search_jump 1 $(( CUR + 1 )) || status 'no match' ;;
 		N) search_jump -1 $(( CUR - 1 )) || status 'no match' ;;

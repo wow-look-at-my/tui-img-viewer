@@ -23,7 +23,7 @@ job_kill() {
 	if (( JOB_PID && ! JOB_FINISHED )); then
 		kill "$JOB_PID" 2>/dev/null
 	fi
-	JOB_DIR= JOB_PID=0 JOB_KEY= JOB_FINISHED=0
+	JOB_DIR='' JOB_PID=0 JOB_KEY='' JOB_FINISHED=0
 }
 
 # Starts the job for the selected entry, or takes a finished job from the cache.
@@ -34,8 +34,8 @@ job_start() {
 	local path=${PWD%/}/$name
 	local -a args=()
 	case ${E_KIND[CUR]} in
-		d) kind=dir ;;
-		f) kind=file ;;
+		d) kind='dir' ;;
+		f) kind='file' ;;
 	esac
 	if (( E_IMG[CUR] )); then
 		kind=image

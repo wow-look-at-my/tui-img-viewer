@@ -61,7 +61,7 @@ draw_list_row() {
 		FRAME+="$S_DIM$REPLY$S_RESET"
 		return 0
 	fi
-	local name=${E_NAME[i]} style= size= line
+	local name=${E_NAME[i]} style='' size='' line
 	case ${E_KIND[i]} in
 		d) name+=/ style=$S_DIR ;;
 		f)
@@ -161,11 +161,11 @@ draw_preview() {
 			PV_PAINTED=text
 			;;
 		msg | error)
-			local style=$S_DIM text=$PV_MSG
+			local style=$S_DIM msg=$PV_MSG
 			[[ $PV_KIND == error ]] && style=$S_ERR
-			(( ${#text} > P_W )) && text="${text:0:P_W-1}…"
-			at $(( P_Y + P_H / 2 )) $(( P_X + (P_W - ${#text}) / 2 ))
-			FRAME+="$style$text$S_RESET"
+			(( ${#msg} > P_W )) && msg="${msg:0:P_W-1}…"
+			at $(( P_Y + P_H / 2 )) $(( P_X + (P_W - ${#msg}) / 2 ))
+			FRAME+="$style$msg$S_RESET"
 			PV_PAINTED=$PV_KIND
 			;;
 		image)

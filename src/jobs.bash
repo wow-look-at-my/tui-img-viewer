@@ -56,15 +56,14 @@ job_stat_lines() {
 }
 
 job_dir() {
-	local path=$1 entry name count=0 images=0 ext
+	local path=$1 entry name count=0 images=0
 	local -a INFO=() text=()
 	shopt -s nullglob
 	(( SHOW_HIDDEN )) && shopt -s dotglob
 	for entry in "$path"/*; do
 		(( count++ ))
 		name=${entry##*/}
-		ext=${name##*.}
-		[[ $name == *.* && ${ext,,} == $IMG_EXT ]] && (( images++ ))
+		is_image "$name" && (( images++ ))
 		(( count > TEXT_LINES )) && continue
 		[[ -d $entry ]] && name+=/
 		text+=("${name//[[:cntrl:]]/?}")

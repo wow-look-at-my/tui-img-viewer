@@ -31,7 +31,6 @@ readonly CACHE_MAX=48            # finished preview jobs kept for the session
 readonly TEXT_LINES=200          # lines of a text or directory preview
 readonly WIDE_MIN_COLS=72        # below this width the panes stack
 readonly DETAIL_ROWS=8
-readonly IMG_EXT='@(png|jpg|jpeg|jpe|jfif|gif|webp|bmp|tif|tiff|avif|heic|heif|jxl|ico|tga|ppm|pgm|pbm|pnm|qoi|svg)'
 
 # Styles. Only attributes and the base colors, so the terminal theme decides the look.
 readonly S_RESET=$'\e[0m'
@@ -47,8 +46,8 @@ readonly S_ERR=$'\e[31m'
 state_init() {
 	RUNNING=1 MODE=normal NOW=0
 	FRAME=
-	STATUS= STATUS_AT=0
-	RUN_DIR= TERM_READY=0 STTY_SAVED= TMUX_RESTORE=0 IN_TMUX=0
+	STATUS='' STATUS_AT=0
+	RUN_DIR='' TERM_READY=0 STTY_SAVED='' TMUX_RESTORE=0 IN_TMUX=0
 	HAVE_FFMPEG=0 HAVE_FFPROBE=0 HAVE_FILE=0
 
 	# Options.
@@ -59,7 +58,6 @@ state_init() {
 	L_X=1 L_Y=2 L_W=0 L_H=0 P_X=1 P_Y=2 P_W=0 P_H=0 D_X=1 D_Y=2 D_W=0 D_H=0
 	SEP_COL=0 SEP_ROW=0
 	CELL_W=10 CELL_H=20 CELL_KNOWN=0 CELL_WAIT_UNTIL=0
-	CLIENT_CELLS=0
 
 	# What must be drawn again.
 	D_ALL=1 D_HEADER=0 D_LIST=0 D_DETAILS=0 D_PREVIEW=0 D_FOOTER=0
@@ -69,14 +67,14 @@ state_init() {
 	N=0 CUR=0 TOP=0
 	E_NAME=() E_KIND=() E_LINK=() E_SIZE=() E_MTIME=() E_IMG=()
 	declare -gA DIR_SEL=()
-	SEARCH= SEARCH_FROM=0
+	SEARCH='' SEARCH_FROM=0
 
 	# Preview pipeline.
 	PENDING=0 PENDING_AT=0
-	JOB_DIR= JOB_PID=0 JOB_KEY= JOB_FINISHED=0 JOB_SEQ=0
+	JOB_DIR='' JOB_PID=0 JOB_KEY='' JOB_FINISHED=0 JOB_SEQ=0
 	GOT_INFO=0 GOT_TEXT=0 GOT_ERR=0 GOT_GEOM=0
 	JOB_INFO=() DET=()
-	PV_KIND=none PV_MSG= PV_TEXT=() PV_PAINTED=
+	PV_KIND=none PV_MSG='' PV_TEXT=() PV_PAINTED=''
 	IMG_W=0 IMG_H=0 STAGES=0 STAGE_DONE=0 TX_STAGE=0 STAGE_W=0 STAGE_H=0 STAGE_BYTES=0
 	BOX_X=0 BOX_Y=0 BOX_C=0 BOX_R=0
 	declare -gA CACHE=()
@@ -84,8 +82,8 @@ state_init() {
 
 	# Graphics and link state.
 	GFX=unknown ACK_MODE=unknown
-	GFX_PRE= GFX_SUF= DSR= PH= DIA=() ID_A=0 ID_B=0
-	SHOWN_ID=0 SHOWN_PH= OLD_ID=0
+	GFX_PRE='' GFX_SUF='' DSR='' PH='' DIA=() ID_A=0 ID_B=0
+	SHOWN_ID=0 SHOWN_PH='' OLD_ID=0
 	HS_PENDING=0 HS_NEED=0 HS_AT=0
 	PROBES=0 ACKS=0 ACK_SEEN=0 ACK_MISSES=0
 	RTT_MS=0 LINK_BPS=0 WIN_CAP=$WIN_MAX

@@ -39,7 +39,9 @@ parse_args() {
 				;;
 			--rate)
 				(( $# )) || die "$arg needs a value"
-				[[ $1 == +([0-9]) ]] && (( $1 > 0 )) || die "--rate needs a positive number of KiB/s, not: $1"
+				if [[ $1 != +([0-9]) ]] || (( $1 < 1 )); then
+					die "--rate needs a positive number of KiB/s, not: $1"
+				fi
 				RATE_BPS=$(( $1 * 1024 ))
 				shift
 				;;
@@ -153,7 +155,7 @@ main() {
 		now_ms
 		(( RESIZED )) && on_resize
 		if [[ -n $STATUS ]] && (( NOW - STATUS_AT > STATUS_MS )); then
-			STATUS= D_FOOTER=1
+			STATUS='' D_FOOTER=1
 		fi
 		preview_tick
 		render

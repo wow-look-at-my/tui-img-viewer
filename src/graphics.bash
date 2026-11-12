@@ -38,7 +38,7 @@ gfx_init() {
 	DIA=()
 	for hex in $DIA_HEX; do
 		printf -v code '%08X' "0x$hex"
-		printf -v mark "\\U$code"
+		printf -v mark '%b' "\\U$code"
 		DIA+=("$mark")
 	done
 	# The image id travels in a color of the base palette, which every
@@ -56,13 +56,14 @@ gfx_cmd() {
 # Sets REPLY to the placeholder cells of image $1 at column $2, row $3,
 # for a box of $4 columns and $5 rows.
 placeholder_block() {
-	local id=$1 x=$2 y=$3 cols=$4 rows=$5 row col line out=
+	local id=$1 x=$2 y=$3 cols=$4 rows=$5 row tail=''
+	local out=''
+	# Only the first cell of a row carries its row and column. A cell with
+	# no marks continues the cell on its left, which halves the bytes.
+	repeat $(( cols - 1 )) "$PH"
+	tail=$REPLY
 	for (( row = 0; row < rows; row++ )); do
-		line=
-		for (( col = 0; col < cols; col++ )); do
-			line+="$PH${DIA[row]}${DIA[col]}"
-		done
-		out+=$'\e['"$(( y + row ));${x}H$line"
+		out+=$'\e['"$(( y + row ));${x}H$PH${DIA[row]}${DIA[0]}$tail"
 	done
 	REPLY=$'\e[38;5;'"${id}m$out"$'\e[39m'
 }
@@ -123,8 +124,15 @@ tx_begin() {
 	tx_abort
 	[[ -r $1 ]] || return 1
 	exec {TX_FD}< "$1"
-	TX_ID=$ID_A
-	(( SHOWN_ID == ID_A )) && TX_ID=$ID_B
+	# A later stage of the shown image keeps its id. The terminal then
+	# replaces the picture in place, and the cells stay as they are.
+	if (( SHOWN_ID && STAGE_DONE > 0 )); then
+		TX_ID=$SHOWN_ID
+	elif (( SHOWN_ID == ID_A )); then
+		TX_ID=$ID_B
+	else
+		TX_ID=$ID_A
+	fi
 	TX_ACTIVE=1 TX_STARTED=0 TX_EOF=0 TX_WAIT=0 TX_PAUSED=0
 	TX_TOTAL=$2 TX_SENT=0 TX_WIN_SENT=0
 	# In fixed-rate mode one question at the start finds a terminal that answers again.
@@ -142,7 +150,7 @@ tx_abort() {
 	exec {TX_FD}<&-
 	local out=
 	(( TX_STARTED && ! TX_EOF )) && out+="${GFX_PRE}q=2,m=0;${GFX_SUF}"
-	(( TX_STARTED )) && out+="${GFX_PRE}q=2,a=d,d=I,i=${TX_ID}${GFX_SUF}"
+	(( TX_STARTED && TX_ID != SHOWN_ID )) && out+="${GFX_PRE}q=2,a=d,d=I,i=${TX_ID}${GFX_SUF}"
 	printf '%s' "$out"
 	TX_ACTIVE=0 TX_WAIT=0 TX_PAUSED=0
 	D_DETAILS=1
@@ -186,7 +194,7 @@ tx_pump() {
 	(( TX_PAUSED )) && D_DETAILS=1
 	TX_PAUSED=0
 
-	local budget=$(( TX_WIN - TX_WIN_SENT )) burst=$BURST chunk ctrl more out= n
+	local budget=$(( TX_WIN - TX_WIN_SENT )) burst=$BURST chunk ctrl more out='' n
 	if (( TX_WIN_SENT == 0 )); then
 		now_ms
 		TX_WIN_AT=$NOW
@@ -221,12 +229,14 @@ tx_pump() {
 tx_done() {
 	exec {TX_FD}<&-
 	TX_ACTIVE=0
+	STAGE_DONE=$TX_STAGE
+	D_DETAILS=1
+	(( TX_ID == SHOWN_ID )) && return 0
 	placeholder_block "$TX_ID" "$BOX_X" "$BOX_Y" "$BOX_C" "$BOX_R"
 	OLD_ID=$SHOWN_ID
 	SHOWN_ID=$TX_ID SHOWN_PH=$REPLY
 	PV_KIND=image
-	STAGE_DONE=$TX_STAGE
-	D_PREVIEW=1 D_DETAILS=1
+	D_PREVIEW=1
 }
 
 # Removes the shown image from the terminal.

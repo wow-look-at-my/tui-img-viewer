@@ -32,6 +32,15 @@ human_size() {
 	done
 }
 
+# Succeeds when the file name $1 has the extension of an image format.
+is_image() {
+	case ${1,,} in
+		*.png | *.jpg | *.jpeg | *.jpe | *.jfif | *.gif | *.webp | *.bmp | *.tif | *.tiff) return 0 ;;
+		*.avif | *.heic | *.heif | *.jxl | *.ico | *.tga | *.ppm | *.pgm | *.pbm | *.pnm | *.qoi | *.svg) return 0 ;;
+	esac
+	return 1
+}
+
 # Sets REPLY to the cell width of the code point in $1.
 char_width() {
 	local cp=$1
@@ -66,7 +75,7 @@ fit() {
 		fi
 		return
 	fi
-	local out= used=0 i ch cp cw
+	local out='' used=0 i ch cp cw
 	for (( i = 0; i < n; i++ )); do
 		ch=${s:i:1}
 		printf -v cp '%d' "'$ch"

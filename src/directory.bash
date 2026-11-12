@@ -4,14 +4,14 @@
 dir_load() {
 	local -a sort_args filter=()
 	case $SORT in
-		time) sort_args=(-t/ -k4,4nr) ;;
-		size) sort_args=(-t/ -k3,3nr) ;;
+		time) sort_args=(-t/ '-k4,4nr') ;;
+		size) sort_args=(-t/ '-k3,3nr') ;;
 		*) sort_args=(-t/ -k5 -f -V) ;;
 	esac
 	(( SHOW_HIDDEN )) || filter=('!' -name '.*')
 
 	local -a dn=() dl=() ds=() dm=() fn=() fk=() fl=() fs=() fm=() fimg=()
-	local target type size mtime name ext
+	local target type size mtime name
 	# A name cannot hold a slash, so the slash is a safe field separator.
 	while IFS=/ read -r -d '' target type size mtime name; do
 		if [[ $target == d ]]; then
@@ -26,8 +26,11 @@ dir_load() {
 			continue
 		fi
 		fk+=(f)
-		ext=${name##*.}
-		[[ $name == *.* && ${ext,,} == $IMG_EXT ]] && fimg+=(1) || fimg+=(0)
+		if is_image "$name"; then
+			fimg+=(1)
+		else
+			fimg+=(0)
+		fi
 	done < <(find . -mindepth 1 -maxdepth 1 "${filter[@]}" -printf '%Y/%y/%s/%T@/%f\0' 2>/dev/null |
 		sort -z "${sort_args[@]}")
 
