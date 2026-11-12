@@ -3,7 +3,7 @@
 declare -gA META=()
 # Bytes of the last read, its file offset, and scratch results of the helpers.
 declare -ga META_B=()
-declare -gi META_BOFF=0 META_I=0 META_N=0 META_D=0 META_LE=0 META_XPTR=0
+declare -gi META_BOFF=0 META_EOF=0 META_I=0 META_N=0 META_D=0 META_LE=0 META_XPTR=0
 declare -g META_S=""
 # TIFF image tags, kept until meta_tiff derives color and alpha from them.
 declare -gi META_TPHOTO=-1 META_TSPP=-1 META_TEXTRA=0 META_TCOMP=-1
@@ -13,8 +13,10 @@ meta_read() {
 	local out
 	META_B=()
 	META_BOFF=$2
+	META_EOF=1
 	out=$(od -An -v -tu1 -j "$2" -N "$3" -- "$1" 2>/dev/null) || return 1
 	IFS=$' \t\n' read -r -d '' -a META_B <<<"$out" || true
+	((${#META_B[@]} == $3)) && META_EOF=0
 	((${#META_B[@]} > 0))
 }
 
@@ -23,6 +25,7 @@ meta_read() {
 meta_need() {
 	local off=$2 cnt=$3 len
 	if ((off < META_BOFF || off + cnt > META_BOFF + ${#META_B[@]})); then
+		((off >= META_BOFF && META_EOF)) && return 1
 		len=$cnt
 		((len < 4096)) && len=4096
 		meta_read "$1" "$off" "$len" || return 1
@@ -99,16 +102,15 @@ meta_num() {
 	5)
 		meta_need "$1" "$2" 8 || return 1
 		meta_u32 $((META_I + 4))
-		n=$META_D
-		META_D=$META_N
+		n=$META_N
 		meta_u32 "$META_I"
-		: "$n"
+		META_D=$n
 		;;
 	*) return 1 ;;
 	esac
 }
 
-# meta_ascii FILE OFFSET COUNT reads an ASCII field into META_S (a later max bytes).
+# meta_ascii FILE OFFSET COUNT reads the start of an ASCII field into META_S.
 meta_ascii() {
 	local cnt=$3
 	((cnt > 255)) && cnt=255
@@ -419,7 +421,8 @@ meta_webp() {
 		META[height]=$((META_N & 0x3fff))
 		codec=lossy
 		;;
-	$((0x5650384c))) # "VP8L": signature 0x2f, then 14-bit sizes minus one and the alpha bit.
+	$((0x5650384c)))
+		# "VP8L": the signature byte 0x2f, the sizes minus one, then the alpha bit.
 		((META_B[20] == 0x2f)) || return 1
 		meta_le32 21
 		META[width]=$(((META_N & 0x3fff) + 1))
@@ -427,7 +430,8 @@ meta_webp() {
 		alpha=$(((META_N >> 28) & 1))
 		codec=lossless
 		;;
-	$((0x56503858))) # "VP8X": flags, then the 24-bit canvas size minus one.
+	$((0x56503858)))
+		# "VP8X": the flags, then the canvas size minus one.
 		flags=${META_B[20]}
 		alpha=$(((flags >> 4) & 1))
 		anim=$(((flags >> 1) & 1))
@@ -445,7 +449,8 @@ meta_webp() {
 			case $type in
 			$((0x56503820))) [[ -n $codec ]] || codec=lossy ;;
 			$((0x5650384c))) [[ -n $codec ]] || codec=lossless ;;
-			$((0x414e4d46))) # ANMF: a 16-byte frame header, then the frame's own chunks.
+			$((0x414e4d46)))
+				# ANMF holds a frame header, then the chunks of that frame.
 				pos=$((pos + 24))
 				continue
 				;;
@@ -482,7 +487,9 @@ meta_tiff() {
 	META_TPHOTO=-1 META_TSPP=-1 META_TEXTRA=0 META_TCOMP=-1
 	# A TIFF file is one TIFF structure; od finds the real end of the file.
 	meta_exif "$1" 0 0xffffffff 1 || return 1
-	alpha=$META_TEXTRA
+	# An extra sample needs a second sample to sit next to.
+	alpha=0
+	((META_TEXTRA && (META_TSPP == -1 || META_TSPP >= 2))) && alpha=1
 	META[alpha]=$alpha
 	case $META_TPHOTO in
 	0 | 1) if ((alpha)); then META[color]=Gray+Alpha; else META[color]=Gray; fi ;;
