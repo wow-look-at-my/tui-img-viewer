@@ -10,7 +10,7 @@ rm -f "$out"/*
 src=(-size 40x30 gradient:red-blue)
 alphasrc=(-size 40x30 gradient:red-blue -alpha set -channel A -fx 'i/w' +channel)
 # Without these, PNG output carries the current time and is not deterministic.
-nodate=(-strip -define png:exclude-chunks=date,time)
+nodate=(-strip -define 'png:exclude-chunks=date,time')
 
 # --- byte helpers: values become hex text, hexbin writes the bytes ---
 order=II
@@ -83,8 +83,8 @@ ifd() {
 }
 
 # tiffblock "IFD0 ENTRY"... -- "EXIF ENTRY"... prints a TIFF header, IFD0 with an
-# Exif pointer (tag 0x8769) and the Exif sub-IFD. Hex in $pix goes right after
-# the header, so pixel data sits at offset.
+# Exif pointer (tag 0x8769) and the Exif sub-IFD. Hex in $pix goes directly
+# after the header.
 pix=""
 tiffblock() {
 	local -a ifd0=() exif=()
@@ -132,7 +132,8 @@ convert -size 40x30 gradient:black-white -colorspace Gray -depth 16 "${nodate[@]
 convert "${src[@]}" -colors 16 "${nodate[@]}" PNG8:"$out/png-palette.png"
 convert "${src[@]}" -interlace PNG "${nodate[@]}" PNG24:"$out/png-interlaced.png"
 # PNG8 keeps binary transparency as a tRNS chunk next to the palette.
-convert "${src[@]}" -colors 8 -fill none -draw 'rectangle 0,0 9,9' "${nodate[@]}" PNG8:"$out/png-trns.png"
+convert "${src[@]}" -alpha set -channel A -fx 'i<10&&j<10?0:1' +channel -colors 8 \
+	"${nodate[@]}" PNG8:"$out/png-trns.png"
 convert -delay 10 "${src[@]}" -size 40x30 gradient:blue-red -loop 0 "${nodate[@]}" APNG:"$out/png-animated.png"
 order=MM
 exifhex=$(tiffblock "272 2 8 $(asc 'PNG Cam')" "274 3 1 $(h16 8)" -- "34855 3 1 $(h16 100)")
@@ -194,7 +195,7 @@ convert "${src[@]}" -colors 16 GIF:"$out/gif89a.gif"
 convert "${src[@]}" -colors 4 GIF87:"$out/gif87a.gif"
 convert "${src[@]}" -type TrueColor BMP3:"$out/bmp-24.bmp"
 convert "${alphasrc[@]}" -define bmp:format=bmp4 BMP:"$out/bmp-32-topdown.bmp"
-# IM writes bottom-up rows only; a negative height (a later offset) marks top-down.
+# ImageMagick writes bottom-up rows only. A negative height field marks top-down.
 printf '\xe2\xff\xff\xff' | dd of="$out/bmp-32-topdown.bmp" bs=1 seek=22 conv=notrunc status=none
 convert "${src[@]}" -colors 16 -type Palette BMP2:"$out/bmp-core.bmp"
 
@@ -210,7 +211,9 @@ exifhex=$(tiffblock "271 2 9 $(asc WebPMake)" "274 3 1 $(h16 5)" -- "34855 3 1 $
 vp8l=$(tail -c +13 "$out/webp-lossless-alpha.webp" | od -An -v -tx1 | tr -d ' \n')
 body=57454250565038580a000000180000002700001d0000$vp8l
 body+=45584946$(le32 $((${#exifhex} / 2)))$exifhex
-(((${#exifhex} / 2) % 2)) && body+=00
+if (((${#exifhex} / 2) % 2)); then
+	body+=00
+fi
 hexbin "52494646$(le32 $((${#body} / 2)))$body" >"$out/webp-vp8x-exif.webp"
 
 # --- TIFF ---
