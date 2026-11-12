@@ -52,8 +52,25 @@ for step in "$@"; do
 	esac
 done
 printf 'q' >&9
+# A program that stays after the q key is a failure. The report shows what stayed.
+mkfifo "$work/hold"
+(
+	# A read with a timeout waits with no child process, so a kill of
+	# this subshell leaves nothing behind.
+	read -r -t 15 _ <> "$work/hold"
+	: > "$work/stuck"
+	echo 'drive.sh: the program did not stop after the q key' >&2
+	ps -eo pid,ppid,stat,etime,args >&2
+	[[ $mode == tmux ]] && screen stuck >&2
+	[[ $mode == tmux ]] && tmux -L "$socket" kill-server 2>/dev/null
+	kill "$terminal" 2>/dev/null
+) &
+watchdog=$!
 exec 9>&-
 wait "$terminal"
+kill "$watchdog" 2>/dev/null
+wait "$watchdog" 2>/dev/null
+[[ -e $work/stuck ]] && exit 1
 [[ $mode == tmux ]] && tmux -L "$socket" kill-server 2>/dev/null
 
 # The summary. Every line is a fact with no timing in it, so a test can
