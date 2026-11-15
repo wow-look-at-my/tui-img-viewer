@@ -121,6 +121,8 @@ now_ms() {
 
 # Shows a message in the footer for a short time.
 status() {
+	# A message can come before the loop runs, when NOW still holds its start value.
+	now_ms
 	STATUS=$1 STATUS_AT=$NOW D_FOOTER=1
 }
 
