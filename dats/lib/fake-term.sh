@@ -101,9 +101,16 @@ respond() {
 mkfifo "$dir/in"
 : > "$dir/events"
 # The pseudo terminal starts with no size, so the command sets one first.
+inner="stty rows $rows cols $cols; $command"
+# The script program of util-linux takes the command after -c. The BSD one takes it after the file name.
+if script --version > /dev/null 2>&1; then
+	pty=(script -qfec "$inner" /dev/null)
+else
+	pty=(script -qeF /dev/null sh -c "$inner")
+fi
 # The named pipe carries the answers back to the command on purpose.
 # shellcheck disable=SC2094
-script -qfec "stty rows $rows cols $cols; $command" /dev/null < "$dir/in" 2>/dev/null |
+"${pty[@]}" < "$dir/in" 2>/dev/null |
 	throttle |
 	tee "$dir/stream" |
 	stdbuf -o0 tr '\033' '\n' |
