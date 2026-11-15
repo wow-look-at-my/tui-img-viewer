@@ -51,6 +51,8 @@ state_init() {
 	STATUS='' STATUS_AT=0
 	RUN_DIR='' TERM_READY=0 STTY_SAVED='' TMUX_RESTORE=0 IN_TMUX=0
 	HAVE_FFMPEG=0 HAVE_FFPROBE=0 HAVE_FILE=0
+	# The stat options that print the size and time of an entry, and its mode and owner.
+	STAT_LIST=() STAT_MODE=()
 
 	# Options.
 	QUALITY=2 SHOW_HIDDEN=0 SORT=name RATE_BPS=131072 START_PATH=.

@@ -48,7 +48,7 @@ job_write() {
 # Appends the mode, the owner and the link target of $1 to INFO.
 job_stat_lines() {
 	local path=$1 text
-	text=$(stat -c '%A  %U:%G' -- "$path" 2>/dev/null) && INFO+=("Mode"$'\t'"$text")
+	text=$(stat "${STAT_MODE[@]}" -- "$path" 2>/dev/null) && INFO+=("Mode"$'\t'"$text")
 	if [[ -L $path ]]; then
 		text=$(readlink -- "$path") && INFO+=("Link"$'\t'"→ $text")
 	fi
@@ -150,9 +150,11 @@ job_meta_lines() {
 # Publishes the PNG file $2 as stage $1 with the pixel size $3 x $4.
 job_stage() {
 	local n=$1 png=$2 bytes
-	base64 -w0 -- "$png" > "$JOB_OUT/.s$n.b64" || return 1
-	bytes=$(stat -c %s -- "$JOB_OUT/.s$n.b64") || return 1
-	job_write "s$n.dim" "$3 $4 $bytes"
+	# GNU base64 breaks its output into lines. The transfer needs one line.
+	( set -o pipefail; base64 < "$png" | tr -d '\n' ) > "$JOB_OUT/.s$n.b64" || return 1
+	bytes=$(wc -c < "$JOB_OUT/.s$n.b64") || return 1
+	# BSD wc puts spaces before the count.
+	job_write "s$n.dim" "$3 $4 $(( bytes ))"
 	mv -- "$JOB_OUT/.s$n.b64" "$JOB_OUT/s$n.b64"
 }
 
