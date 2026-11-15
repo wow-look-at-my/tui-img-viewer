@@ -109,8 +109,10 @@ else
 	pty=(script -qeF /dev/null sh -c "$inner")
 fi
 # The named pipe carries the answers back to the command on purpose.
+# BSD script stops when its input is a named pipe, so cat stands between them.
 # shellcheck disable=SC2094
-"${pty[@]}" < "$dir/in" 2>/dev/null |
+cat "$dir/in" |
+	"${pty[@]}" |
 	throttle |
 	tee "$dir/stream" |
 	stdbuf -o0 tr '\033' '\n' |
