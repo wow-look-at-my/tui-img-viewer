@@ -29,7 +29,7 @@ now() {
 screen() {
 	printf '== screen %s ==\n' "$1"
 	tmux -L "$socket" capture-pane -p |
-		LC_ALL=C sed -e 's/\xf4\x8e\xbb\xae[\x80-\xf3]*/#/g' -e 's/ *$//'
+		LC_ALL=C sed -e $'s/\xf4\x8e\xbb\xae[\x80-\xf3]*/#/g' -e 's/ *$//'
 }
 
 bash "$here/fake-term.sh" "$work" "$rate" "$cols" "$rows" "$command" &
@@ -54,6 +54,8 @@ for step in "$@"; do
 	esac
 done
 printf 'q' >&9
+# The fake terminal ends when the last writer closes the pipe, so the watchdog must not hold it.
+exec 9>&-
 # A program that stays after the q key is a failure. The report shows what stayed.
 mkfifo "$work/hold"
 (
@@ -68,7 +70,6 @@ mkfifo "$work/hold"
 	kill "$terminal" 2>/dev/null
 ) &
 watchdog=$!
-exec 9>&-
 wait "$terminal"
 kill "$watchdog" 2>/dev/null
 wait "$watchdog" 2>/dev/null

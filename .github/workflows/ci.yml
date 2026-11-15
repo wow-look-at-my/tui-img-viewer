@@ -32,4 +32,8 @@ jobs:
           curl -fsSL -H "Authorization: Bearer $BUILDHOST_READ_TOKEN" https://apt.pazer.build/bashfs/install.sh \
             | sudo BUILDHOST_TOKEN="$BUILDHOST_READ_TOKEN" sh
           sudo apt-get install -y dats bashfs
-      - run: dats dats/
+      - run: dats -v dats/
+      # dats reports only the exit code of a failing test. The shellcheck test of the single script runs here too and its findings land in the log.
+      - name: shellcheck the single script
+        if: always()
+        run: shellcheck --norc -s bash imgv

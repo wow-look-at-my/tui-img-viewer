@@ -48,7 +48,7 @@ job_write() {
 # Appends the mode, the owner and the link target of $1 to INFO.
 job_stat_lines() {
 	local path=$1 text
-	text=$(stat -c '%A  %U:%G' -- "$path" 2>/dev/null) && INFO+=("Mode"$'\t'"$text")
+	text=$(stat "${STAT_MODE[@]}" -- "$path" 2>/dev/null) && INFO+=("Mode"$'\t'"$text")
 	if [[ -L $path ]]; then
 		text=$(readlink -- "$path") && INFO+=("Link"$'\t'"→ $text")
 	fi
@@ -150,9 +150,11 @@ job_meta_lines() {
 # Publishes the PNG file $2 as stage $1 with the pixel size $3 x $4.
 job_stage() {
 	local n=$1 png=$2 bytes
-	base64 -w0 -- "$png" > "$JOB_OUT/.s$n.b64" || return 1
-	bytes=$(stat -c %s -- "$JOB_OUT/.s$n.b64") || return 1
-	job_write "s$n.dim" "$3 $4 $bytes"
+	# GNU base64 breaks its output into lines. The transfer needs one line.
+	( set -o pipefail; base64 < "$png" | tr -d '\n' ) > "$JOB_OUT/.s$n.b64" || return 1
+	bytes=$(wc -c < "$JOB_OUT/.s$n.b64") || return 1
+	# BSD wc puts spaces before the count.
+	job_write "s$n.dim" "$3 $4 $(( bytes ))"
 	mv -- "$JOB_OUT/.s$n.b64" "$JOB_OUT/s$n.b64"
 }
 
@@ -219,17 +221,26 @@ job_image() {
 	# ffmpeg reads the file through a link, so no file name can look like an option or a sequence pattern.
 	ln -s -- "$path" "$JOB_OUT/src"
 	local -a input=(-noautorotate -i "$JOB_OUT/src")
+	# The filter that puts the sRGB curve on a picture that holds linear light.
+	local curve='if(lte(val/maxval,0.0031308),12.92*val,(1.055*pow(val/maxval,1/2.4)-0.055)*maxval)'
+	local srgb="lutrgb=r='$curve':g='$curve':b='$curve',"
 	case $format in
 		EXR)
-			# The picture holds linear light. The decoder applies the sRGB curve.
-			input=(-apply_trc iec61966_2_1 -i "$JOB_OUT/src")
+			input=(-i "$JOB_OUT/src")
+			if [[ $(ffmpeg -hide_banner -h decoder=exr 2>/dev/null) == *apply_trc* ]]; then
+				# This decoder applies the curve.
+				input=(-apply_trc iec61966_2_1 -i "$JOB_OUT/src")
+			elif [[ ${META[color]-} == @(RGBA|Gray+Alpha) ]]; then
+				turn="format=gbrap16le,$srgb"
+			else
+				turn="format=gbrp16le,$srgb"
+			fi
 			;;
 		HDR)
 			if [[ ${META[scan_order]-} == '-Y +X' && $(ffmpeg -hide_banner -decoders 2>/dev/null) == *' hdr '* ]]; then
 				# This ffmpeg reads the format. Its output is linear light, so the sRGB curve follows here.
-				local curve='if(lte(val/maxval,0.0031308),12.92*val,(1.055*pow(val/maxval,1/2.4)-0.055)*maxval)'
 				input=(-i "$JOB_OUT/src")
-				turn="format=gbrp16le,lutrgb=r='$curve':g='$curve':b='$curve',"
+				turn="format=gbrp16le,$srgb"
 			elif job_radiance "$path" "$w" "$h" "$out_w" "$out_h"; then
 				input=(-f rawvideo -pixel_format "$RAD_FORMAT" -video_size "${w}x$RAD_ROWS" -i "$JOB_OUT/planes")
 				turn=$RAD_FILTER

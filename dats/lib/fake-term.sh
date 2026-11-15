@@ -17,14 +17,22 @@ throttle() {
 		cat
 		return
 	fi
-	local slice=$(( rate / 20 )) chunk rc
+	local slice=$(( rate / 20 )) chunk rc now due=0 usec pause
 	(( slice < 1 )) && slice=1
 	while :; do
 		IFS= read -r -N "$slice" -t 0.05 chunk
 		rc=$?
 		printf '%s' "$chunk"
 		(( rc == 1 )) && [[ -z $chunk ]] && return
-		[[ -n $chunk ]] && sleep 0.05
+		[[ -n $chunk ]] || continue
+		# The link is free again at the time in due, in microseconds.
+		now=${EPOCHREALTIME/[.,]/}
+		(( now - due > 100000 )) && due=$now
+		(( due += ${#chunk} * 1000000 / rate ))
+		usec=$(( due - now ))
+		(( usec > 0 )) || continue
+		printf -v pause '%d.%06d' $(( usec / 1000000 )) $(( usec % 1000000 ))
+		sleep "$pause"
 	done
 }
 
@@ -64,7 +72,7 @@ sequence() {
 			fi
 			if (( open )) && [[ $ctrl == *m=0* ]]; then
 				open=0
-				if base64 -d "$dir/img.$image.b64" > "$dir/img.$image.png" 2>/dev/null; then
+				if base64 -d < "$dir/img.$image.b64" > "$dir/img.$image.png" 2>/dev/null; then
 					stamp image "$image" complete
 				else
 					stamp image "$image" broken
@@ -101,9 +109,18 @@ respond() {
 mkfifo "$dir/in"
 : > "$dir/events"
 # The pseudo terminal starts with no size, so the command sets one first.
+inner="stty rows $rows cols $cols; $command"
+# The script program of util-linux takes the command after -c. The BSD one takes it after the file name.
+if script --version > /dev/null 2>&1; then
+	pty=(script -qfec "$inner" /dev/null)
+else
+	pty=(script -qeF /dev/null sh -c "$inner")
+fi
 # The named pipe carries the answers back to the command on purpose.
+# BSD script stops when its input is a named pipe, so cat stands between them.
 # shellcheck disable=SC2094
-script -qfec "stty rows $rows cols $cols; $command" /dev/null < "$dir/in" 2>/dev/null |
+cat < "$dir/in" |
+	"${pty[@]}" |
 	throttle |
 	tee "$dir/stream" |
 	stdbuf -o0 tr '\033' '\n' |

@@ -51,7 +51,12 @@ radiance_planes() {
 	RAD_ROWS=0 RAD_FORMAT=gbrap RAD_LINE=()
 
 	hex=$(od -An -v -tx1 -j "$offset" -- "$file") || return 1
-	hex=${hex//$'\n'/}
+	# GNU od puts one space before each byte and BSD od puts more. The decoder needs exactly one.
+	hex=" ${hex//$'\n'/ }"
+	while [[ $hex == *'  '* ]]; do
+		hex=${hex//  / }
+	done
+	hex=${hex% }
 	# A file with no run-length coding holds a few bytes for each pixel.
 	if (( ${#hex} / 3 == width * height * 4 )) && [[ ${hex:0:6} != ' 02 02' ]]; then
 		tail -c "+$(( offset + 1 ))" -- "$file" > "$out" || return 1

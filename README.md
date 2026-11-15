@@ -45,7 +45,7 @@ Press `?` in the program for the keys.
 
 ## What it needs
 
-- bash 5, coreutils, findutils and `stty`. Ubuntu 22.04 has all of them.
+- bash 5, `stty`, and the file tools of a GNU or a BSD system. Ubuntu 22.04 has all of them. macOS has all of them except bash 5, which Homebrew installs.
 - A terminal with the kitty graphics protocol: Ghostty or kitty. tmux is supported and is the main case.
 - `ffmpeg` on the remote host, to decode and shrink images. Without it, only PNG files have a preview.
 - `file` is optional. It names the type of a file that is not an image.

@@ -12,6 +12,10 @@ shared:
 				fi
 			done < <(find dats/fixtures/browse -type f -print0)
 			exit "$rc"
+		stat: |
+			#!/bin/sh
+			echo 'stat: broken on purpose' >&2
+			exit 1
 
 # An image with much detail: its preview is too large for the buffers
 # between tmux and a slow terminal.
@@ -39,6 +43,15 @@ tests:
 			- "images: 0"
 		!stdout:
 			- ".hidden-note.txt"
+
+	- desc: a listing that fails shows the reason in the footer
+	  timeout: 60s
+	  cmd: mkdir -p {outputs.bin} && cp {shared.stat} {outputs.bin}/stat && chmod +x {outputs.bin}/stat && PATH={outputs.bin}:$PATH bash dats/lib/drive.sh dats/fixtures/browse w:1.5 shot:broken
+	  outputs:
+		stdout:
+			- " (empty)"
+			- "cannot list this directory: stat: broken on purpose"
+			- "0/0  name  normal"
 
 	- desc: a large image arrives through tmux as a draft and then in full
 	  timeout: 60s

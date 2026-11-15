@@ -1,17 +1,45 @@
 # The directory listing and the selection.
 
+# Prints one record for each entry of the current directory: the type of the
+# target, the type of the entry and the size. This also covers the time and
+# the name. A NUL ends each record. The output of stat names no file, so its
+# lines pair with the names by position.
+dir_scan() {
+	shopt -s nullglob
+	(( SHOW_HIDDEN )) && shopt -s dotglob
+	local -a entries=() meta=()
+	local name target type try i=0
+	# An entry can go away between both reads. The scan then starts again.
+	for (( try = 0; try < 3; try++ )); do
+		entries=(*)
+		(( ${#entries[@]} )) || return 0
+		mapfile -t meta < <(printf './%s\0' "${entries[@]}" | xargs -0 stat "${STAT_LIST[@]}")
+		(( ${#meta[@]} == ${#entries[@]} )) && break
+	done
+	(( ${#meta[@]} == ${#entries[@]} )) || return 1
+	for name in "${entries[@]}"; do
+		target=o type=f
+		[[ -L $name ]] && type=l
+		if [[ -d $name ]]; then
+			target=d
+		elif [[ -f $name ]]; then
+			target=f
+		fi
+		printf '%s/%s/%s/%s\0' "$target" "$type" "${meta[i++]}" "$name"
+	done
+}
+
 # Reads the current directory into the E_* arrays. Directories come first.
 dir_load() {
-	local -a sort_args filter=()
+	local -a sort_args
 	case $SORT in
 		time) sort_args=(-t/ '-k4,4nr') ;;
 		size) sort_args=(-t/ '-k3,3nr') ;;
 		*) sort_args=(-t/ -k5 -f -V) ;;
 	esac
-	(( SHOW_HIDDEN )) || filter=('!' -name '.*')
 
 	local -a dn=() dl=() ds=() dm=() fn=() fk=() fl=() fs=() fm=() fimg=()
-	local target type size mtime name
+	local target type size mtime name reason=
 	# A name cannot hold a slash, so the slash is a safe field separator.
 	while IFS=/ read -r -d '' target type size mtime name; do
 		if [[ $target == d ]]; then
@@ -31,8 +59,15 @@ dir_load() {
 		else
 			fimg+=(0)
 		fi
-	done < <(find . -mindepth 1 -maxdepth 1 "${filter[@]}" -printf '%Y/%y/%s/%T@/%f\0' 2>/dev/null |
-		sort -z "${sort_args[@]}")
+	done < <(
+		set -o pipefail
+		{ dir_scan | sort -z "${sort_args[@]}"; } 2> "$RUN_DIR/list.err"
+	)
+	# The messages of the tools would damage the screen, so the footer shows the first one.
+	if ! wait "$!"; then
+		IFS= read -r reason < "$RUN_DIR/list.err"
+		status "cannot list this directory: ${reason:-no message}"
+	fi
 
 	local -a dk=() di=()
 	local i

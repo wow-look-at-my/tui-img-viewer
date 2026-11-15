@@ -115,6 +115,12 @@ main() {
 	command -v ffmpeg >/dev/null && HAVE_FFMPEG=1
 	command -v ffprobe >/dev/null && HAVE_FFPROBE=1
 	command -v file >/dev/null && HAVE_FILE=1
+	# GNU stat takes its format after -c, BSD stat after -f.
+	if stat -c %s . >/dev/null 2>&1; then
+		STAT_LIST=(-c '%s/%.9Y') STAT_MODE=(-c '%A  %U:%G')
+	else
+		STAT_LIST=(-f '%z/%Fm') STAT_MODE=(-f '%Sp  %Su:%Sg')
+	fi
 	[[ -n ${TMUX-} && -n ${TMUX_PANE-} ]] && IN_TMUX=1
 
 	RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/$PROG.XXXXXX") || die 'cannot create a work directory'
