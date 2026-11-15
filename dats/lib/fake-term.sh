@@ -111,7 +111,7 @@ fi
 # The named pipe carries the answers back to the command on purpose.
 # BSD script stops when its input is a named pipe, so cat stands between them.
 # shellcheck disable=SC2094
-cat "$dir/in" |
+cat < "$dir/in" |
 	"${pty[@]}" |
 	throttle |
 	tee "$dir/stream" |
