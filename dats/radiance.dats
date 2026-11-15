@@ -7,9 +7,9 @@ shared:
 			source src/radiance.bash
 			out=$(mktemp)
 			radiance_planes "$1" "$2" "$3" "$4" "$5" "$out"
-			echo "rc=$? rows=$RAD_ROWS format=$RAD_FORMAT bytes=$(stat -c %s "$out")"
+			echo "rc=$? rows=$RAD_ROWS format=$RAD_FORMAT bytes=$(( $(wc -c < "$out") ))"
 			if [[ ${6-} == hex ]]; then
-				od -An -v -tx1 -w8 "$out"
+				od -An -v -tx1 "$out" | xargs -n 8 | sed 's/^/ /'
 			else
 				sha256sum < "$out"
 			fi
