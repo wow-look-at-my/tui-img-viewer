@@ -66,7 +66,7 @@ dir_load() {
 	# The messages of the tools would damage the screen, so the footer shows the first one.
 	if ! wait "$!"; then
 		IFS= read -r reason < "$RUN_DIR/list.err"
-		status "cannot list $PWD: ${reason:-no message}"
+		status "cannot list this directory: ${reason:-no message}"
 	fi
 
 	local -a dk=() di=()

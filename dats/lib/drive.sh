@@ -29,7 +29,7 @@ now() {
 screen() {
 	printf '== screen %s ==\n' "$1"
 	tmux -L "$socket" capture-pane -p |
-		LC_ALL=C sed -e 's/\xf4\x8e\xbb\xae[\x80-\xf3]*/#/g' -e 's/ *$//'
+		LC_ALL=C sed -e $'s/\xf4\x8e\xbb\xae[\x80-\xf3]*/#/g' -e 's/ *$//'
 }
 
 bash "$here/fake-term.sh" "$work" "$rate" "$cols" "$rows" "$command" &
