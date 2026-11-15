@@ -64,7 +64,7 @@ sequence() {
 			fi
 			if (( open )) && [[ $ctrl == *m=0* ]]; then
 				open=0
-				if base64 -d "$dir/img.$image.b64" > "$dir/img.$image.png" 2>/dev/null; then
+				if base64 -d < "$dir/img.$image.b64" > "$dir/img.$image.png" 2>/dev/null; then
 					stamp image "$image" complete
 				else
 					stamp image "$image" broken
