@@ -461,17 +461,17 @@ stage_limit() {
 dir_scan() {
 	shopt -s nullglob
 	(( SHOW_HIDDEN )) && shopt -s dotglob
-	local -a names=() meta=()
+	local -a entries=() meta=()
 	local name target type try i=0
 	# An entry can go away between both reads. The scan then starts again.
 	for (( try = 0; try < 3; try++ )); do
-		names=(*)
-		(( ${#names[@]} )) || return 0
-		mapfile -t meta < <(printf './%s\0' "${names[@]}" | xargs -0 stat "${STAT_LIST[@]}")
-		(( ${#meta[@]} == ${#names[@]} )) && break
+		entries=(*)
+		(( ${#entries[@]} )) || return 0
+		mapfile -t meta < <(printf './%s\0' "${entries[@]}" | xargs -0 stat "${STAT_LIST[@]}")
+		(( ${#meta[@]} == ${#entries[@]} )) && break
 	done
-	(( ${#meta[@]} == ${#names[@]} )) || return 1
-	for name in "${names[@]}"; do
+	(( ${#meta[@]} == ${#entries[@]} )) || return 1
+	for name in "${entries[@]}"; do
 		target=o type=f
 		[[ -L $name ]] && type=l
 		if [[ -d $name ]]; then
@@ -1409,7 +1409,12 @@ radiance_planes() {
 	RAD_ROWS=0 RAD_FORMAT=gbrap RAD_LINE=()
 
 	hex=$(od -An -v -tx1 -j "$offset" -- "$file") || return 1
-	hex=${hex//$'\n'/}
+	# GNU od puts one space before each byte and BSD od puts more. The decoder needs exactly one.
+	hex=" ${hex//$'\n'/ }"
+	while [[ $hex == *'  '* ]]; do
+		hex=${hex//  / }
+	done
+	hex=${hex% }
 	# A file with no run-length coding holds a few bytes for each pixel.
 	if (( ${#hex} / 3 == width * height * 4 )) && [[ ${hex:0:6} != ' 02 02' ]]; then
 		tail -c "+$(( offset + 1 ))" -- "$file" > "$out" || return 1

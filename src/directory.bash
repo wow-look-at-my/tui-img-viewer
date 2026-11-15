@@ -7,17 +7,17 @@
 dir_scan() {
 	shopt -s nullglob
 	(( SHOW_HIDDEN )) && shopt -s dotglob
-	local -a names=() meta=()
+	local -a entries=() meta=()
 	local name target type try i=0
 	# An entry can go away between both reads. The scan then starts again.
 	for (( try = 0; try < 3; try++ )); do
-		names=(*)
-		(( ${#names[@]} )) || return 0
-		mapfile -t meta < <(printf './%s\0' "${names[@]}" | xargs -0 stat "${STAT_LIST[@]}")
-		(( ${#meta[@]} == ${#names[@]} )) && break
+		entries=(*)
+		(( ${#entries[@]} )) || return 0
+		mapfile -t meta < <(printf './%s\0' "${entries[@]}" | xargs -0 stat "${STAT_LIST[@]}")
+		(( ${#meta[@]} == ${#entries[@]} )) && break
 	done
-	(( ${#meta[@]} == ${#names[@]} )) || return 1
-	for name in "${names[@]}"; do
+	(( ${#meta[@]} == ${#entries[@]} )) || return 1
+	for name in "${entries[@]}"; do
 		target=o type=f
 		[[ -L $name ]] && type=l
 		if [[ -d $name ]]; then
