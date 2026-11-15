@@ -17,16 +17,20 @@ throttle() {
 		cat
 		return
 	fi
-	local slice=$(( rate / 20 )) chunk rc usec pause
+	local slice=$(( rate / 20 )) chunk rc now due=0 usec pause
 	(( slice < 1 )) && slice=1
 	while :; do
 		IFS= read -r -N "$slice" -t 0.05 chunk
 		rc=$?
 		printf '%s' "$chunk"
 		(( rc == 1 )) && [[ -z $chunk ]] && return
-		# A read can end with less than a slice. The pause is the time that its bytes take on the link.
-		usec=$(( ${#chunk} * 1000000 / rate ))
-		(( usec )) || continue
+		[[ -n $chunk ]] || continue
+		# The link is free again at the time in due, in microseconds.
+		now=${EPOCHREALTIME/[.,]/}
+		(( now - due > 100000 )) && due=$now
+		(( due += ${#chunk} * 1000000 / rate ))
+		usec=$(( due - now ))
+		(( usec > 0 )) || continue
 		printf -v pause '%d.%06d' $(( usec / 1000000 )) $(( usec % 1000000 ))
 		sleep "$pause"
 	done
