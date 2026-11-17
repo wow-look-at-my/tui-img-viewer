@@ -8,7 +8,7 @@ sha256=3fa9daf85ebf35068f090ce51283ddeeb3c75eb5bc70b1a4a7cb05868bfe06a4
 mkdir -p "$1"
 dir=$(cd "$1" && pwd)
 
-rm -rf -- "$dir/bin"
+rm -rf -- "${dir:?}/bin"
 mkdir "$dir/bin"
 busybox --install -s "$dir/bin"
 # busybox has no tmux and no ffmpeg, so imgv runs those of the host.
@@ -33,4 +33,5 @@ if [[ ! -x $dir/bash ]]; then
 	cp "$src/bash-$version/bash" "$dir/bash"
 	rm -rf -- "$src"
 fi
-"$dir/bash" -c 'echo "bash $BASH_VERSION and $(busybox | head -n 1)"'
+"$dir/bash" --version | head -n 1
+busybox | head -n 1

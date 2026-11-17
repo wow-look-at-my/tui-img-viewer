@@ -45,7 +45,8 @@ Press `?` in the program for the keys.
 
 ## What it needs
 
-- bash 5, `stty`, and the file tools of a GNU or a BSD system. Ubuntu 22.04 has all of them. macOS has all of them except bash 5, which Homebrew installs.
+- bash 3.2 or later, `stty`, and the file tools of a GNU, a BSD or a busybox system. Ubuntu 22.04 has all of them. A NAS with busybox and an old bash has them too.
+- A clock. A current bash has its own. An older bash reads the clock of Linux in `/proc/uptime`. macOS has no such file, so install bash 5 there with Homebrew.
 - A terminal with the kitty graphics protocol: Ghostty or kitty. tmux is supported and is the main case.
 - `ffmpeg` on the remote host, to decode and shrink images. Without it, only PNG files have a preview.
 - `file` is optional. It names the type of a file that is not an image.
@@ -91,6 +92,13 @@ dats dats/           # runs the tests
 ```
 
 The tests run `imgv` on a fake terminal (`dats/lib/fake-term.sh`) that answers like Ghostty, limits the link speed, and records the image data.
+
+The same tests run a second time with bash 3.2 and the tools of busybox. The first command builds that environment:
+
+```bash
+dats/lib/busybox-env.sh .busybox-env
+IMGV_SH=$PWD/.busybox-env/bash IMGV_PATH=$PWD/.busybox-env/bin dats dats/
+```
 
 ## License
 

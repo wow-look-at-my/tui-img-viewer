@@ -101,6 +101,7 @@ while read -r ms kind detail size; do
 				open=1
 			fi
 			# An empty last chunk closes a transfer that the program stopped.
+			# shellcheck disable=SC2154 # meta_probe sets the size
 			if (( open )) && [[ $detail == *m=0* ]]; then
 				open=0
 				png=$work/img.$images.png

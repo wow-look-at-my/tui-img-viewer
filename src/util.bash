@@ -239,6 +239,8 @@ fit_px() {
 
 # Sets REPLY to a line of $1 copies of the string $2.
 repeat() {
+	# An old bash keeps the value when printf -v writes an empty text.
+	REPLY=
 	printf -v REPLY '%*s' "$1" ''
 	REPLY=${REPLY// /$2}
 }

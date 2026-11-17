@@ -1,5 +1,4 @@
 # Drawing. Every function appends to FRAME, and flush writes the frame once.
-# Each part of the screen has a dirty flag, so a key press sends few bytes.
 
 flush() {
 	[[ -n $FRAME ]] || return 0
@@ -142,9 +141,9 @@ draw_details() {
 	done
 }
 
-# Draws the preview pane. PV_PAINTED remembers what is on the screen. An
-# empty pane is not erased again and a new stage of an image replaces the
-# old stage without a blank moment.
+# Draws the preview pane. PV_PAINTED remembers what is on the screen. An empty
+# pane is not erased again and a new stage of an image replaces the stage
+# without a blank moment.
 draw_preview() {
 	(( P_H > 0 )) || return 0
 	local want=$PV_KIND

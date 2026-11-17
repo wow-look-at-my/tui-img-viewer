@@ -3,7 +3,9 @@
 shared:
 	files:
 		decode.sh: |
-			set -o nounset
+			if (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) )); then
+				set -o nounset
+			fi
 			source src/radiance.bash
 			out=$(mktemp)
 			radiance_planes "$1" "$2" "$3" "$4" "$5" "$out"
@@ -23,21 +25,21 @@ setup:
 
 tests:
 	- desc: every scan line of the fixture decodes to the planes that ffmpeg reads
-	  cmd: bash {shared.decode.sh} dats/fixtures/browse/scene.hdr 82 320 240 1
+	  cmd: dats/lib/run.sh {shared.decode.sh} dats/fixtures/browse/scene.hdr 82 320 240 1
 	  outputs:
 		stdout:
 			0: '^rc=0 rows=240 format=gbrap bytes=307200$'
 			1: '^01588fa429316307457bc6860ded88b64034159167d19142a999fd04b8c7653e  -$'
 
 	- desc: a step of three decodes every third scan line
-	  cmd: bash {shared.decode.sh} dats/fixtures/browse/scene.hdr 82 320 240 3
+	  cmd: dats/lib/run.sh {shared.decode.sh} dats/fixtures/browse/scene.hdr 82 320 240 3
 	  outputs:
 		stdout:
 			0: '^rc=0 rows=80 format=gbrap bytes=102400$'
 			1: '^f38ed9e5e69cf7cfeb076ce58648b1ca35bc9901363a86e3d615fe79c79ce13d  -$'
 
 	- desc: marker bytes inside the pixel data do not break the decoder
-	  cmd: bash {shared.decode.sh} {shared.marker.hdr} 45 8 2 1 hex
+	  cmd: dats/lib/run.sh {shared.decode.sh} {shared.marker.hdr} 45 8 2 1 hex
 	  outputs:
 		stdout:
 			0: '^rc=0 rows=2 format=gbrap bytes=64$'
@@ -51,7 +53,7 @@ tests:
 			8: '^ 81 81 81 81 81 81 81 81$'
 
 	- desc: a step skips lines in a file with marker bytes in its data
-	  cmd: bash {shared.decode.sh} {shared.marker.hdr} 45 8 2 2 hex
+	  cmd: dats/lib/run.sh {shared.decode.sh} {shared.marker.hdr} 45 8 2 2 hex
 	  outputs:
 		stdout:
 			0: '^rc=0 rows=1 format=gbrap bytes=32$'
@@ -61,7 +63,7 @@ tests:
 			4: '^ 80 80 80 80 80 80 80 80$'
 
 	- desc: a file with no run-length coding passes through as packed pixels
-	  cmd: bash {shared.decode.sh} {shared.flat.hdr} 45 2 2 1 hex
+	  cmd: dats/lib/run.sh {shared.decode.sh} {shared.flat.hdr} 45 2 2 1 hex
 	  outputs:
 		stdout:
 			0: '^rc=0 rows=2 format=rgba bytes=16$'
@@ -69,7 +71,7 @@ tests:
 			2: '^ 07 08 09 82 0a 0b 0c 83$'
 
 	- desc: pixel data that ends early is an error
-	  cmd: head -c 2000 dats/fixtures/browse/scene.hdr > {outputs.cut.hdr}; bash {shared.decode.sh} {outputs.cut.hdr} 82 320 240 1
+	  cmd: head -c 2000 dats/fixtures/browse/scene.hdr > {outputs.cut.hdr}; dats/lib/run.sh {shared.decode.sh} {outputs.cut.hdr} 82 320 240 1
 	  outputs:
 		stdout:
 			0: '^rc=1 '

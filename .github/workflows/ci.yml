@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: wow-look-at-my/actions@bubblewrap#latest
       # Not cached-apt: ffmpeg loads a library that apt sets up as an alternative, and a cache restore does not make that link.
-      - run: sudo apt-get update && sudo apt-get install -y tmux ffmpeg shellcheck
+      - run: sudo apt-get update && sudo apt-get install -y tmux ffmpeg shellcheck busybox-static gcc make
       - uses: wow-look-at-my/actions@secret-server#latest
       # bashfs is a private package. The authenticated apt source lists it and dats.
       - name: Install dats and bashfs
@@ -33,6 +33,9 @@ jobs:
             | sudo BUILDHOST_TOKEN="$BUILDHOST_READ_TOKEN" sh
           sudo apt-get install -y dats bashfs
       - run: dats -v dats/
+      # The second run uses the oldest bash that imgv supports and the tools of busybox.
+      - run: bash dats/lib/busybox-env.sh .busybox-env
+      - run: IMGV_SH="$PWD/.busybox-env/bash" IMGV_PATH="$PWD/.busybox-env/bin" dats -v dats/
       # dats reports only the exit code of a failing test. The shellcheck test of the single script runs here too and its findings land in the log.
       - name: shellcheck the single script
         if: always()

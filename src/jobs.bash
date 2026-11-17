@@ -93,6 +93,8 @@ job_file() {
 		# A text file holds no NUL byte.
 		read_lines raw "$JOB_OUT/head"
 		for line in "${raw[@]:0:TEXT_LINES}"; do
+			# The pane shows the start of a line. An old bash needs seconds to replace text in a long one.
+			line=${line:0:1024}
 			line=${line//$'\t'/    }
 			text+=("${line//[[:cntrl:]]/}")
 		done

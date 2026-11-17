@@ -355,6 +355,8 @@ fit_px() {
 
 # Sets REPLY to a line of $1 copies of the string $2.
 repeat() {
+	# An old bash keeps the value when printf -v writes an empty text.
+	REPLY=
 	printf -v REPLY '%*s' "$1" ''
 	REPLY=${REPLY// /$2}
 }
@@ -803,8 +805,6 @@ search_jump() {
 
 # The results. Each key K has a variable META_K, and an empty one means: not known.
 META_KEYS='alpha bits color data_offset datetime detail exposure fnumber focal format height iso lens make model orientation scan_order width'
-# shellcheck disable=SC2034 # only the test suite reads this result
-META_alpha=''
 # Bytes of the last read, its file offset, and scratch results of the helpers.
 META_B=()
 META_BOFF=0 META_EOF=0 META_I=0 META_N=0 META_D=0 META_LE=0 META_XPTR=0
@@ -815,8 +815,9 @@ META_TPHOTO=-1 META_TSPP=-1 META_TEXTRA=0 META_TCOMP=-1
 # Empties every result.
 meta_clear() {
 	local key
+	# An old bash keeps the value when printf -v writes an empty text.
 	for key in $META_KEYS; do
-		printf -v "META_$key" ''
+		eval "META_$key="
 	done
 }
 meta_clear
@@ -1517,6 +1518,7 @@ meta_probe() {
 	esac
 	META_B=()
 	if ((rc == 0 && ${META_width:-0} > 0 && ${META_height:-0} > 0)); then
+		META_alpha=${META_alpha:-0}
 		return 0
 	fi
 	meta_clear
@@ -1576,12 +1578,11 @@ radiance_planes() {
 	local -a rows
 	RAD_ROWS=0 RAD_FORMAT=gbrap RAD_LINE=()
 
-	hex=$(od -An -v -tx1 -j "$offset" -- "$file") || return 1
-	# GNU od puts one space before each byte and BSD od puts more. The decoder needs exactly one.
-	hex=" ${hex//$'\n'/ }"
-	while [[ $hex == *'  '* ]]; do
-		hex=${hex//  / }
-	done
+	# The decoder needs exactly one space before each byte, and od gives more
+	# on some hosts. An old bash is very slow when it replaces text in a long
+	# string, so tr and sed do that work in this function.
+	hex=$(set -o pipefail; od -An -v -tx1 -j "$offset" -- "$file" | tr -s ' \n' ' ') || return 1
+	hex=" ${hex# }"
 	hex=${hex% }
 	# A file with no run-length coding holds a few bytes for each pixel.
 	if (( ${#hex} / 3 == width * height * 4 )) && [[ ${hex:0:6} != ' 02 02' ]]; then
@@ -1596,7 +1597,9 @@ radiance_planes() {
 	# the markers finds the lines without a walk through all the data.
 	printf -v marker ' 02 02 %02x %02x' $(( width >> 8 )) $(( width & 255 ))
 	# The cut drops an empty line, and the data must start with a marker.
-	IFS=$'\n' read -r -d '' -a rows <<< "${hex//"$marker"/$'\n'}"
+	local nl=$'\n' cut
+	cut=$(printf '%s' "$hex" | sed "s/$marker/\\$nl/g")
+	IFS=$'\n' read -r -d '' -a rows <<< "$cut"
 	local fast=1
 	(( ${#rows[@]} == height )) && [[ $hex == "$marker"* ]] || fast=0
 
@@ -1637,7 +1640,7 @@ radiance_planes() {
 	(( RAD_ROWS > 0 )) || return 1
 	# The plane order of the pixel format: green, blue, red, then the exponent.
 	for ch in 1 2 0 3; do
-		printf '%b' "${plane[ch]// /\\x}"
+		printf '%b' "$(printf '%s' "${plane[ch]}" | sed 's/ /\\x/g')"
 	done > "$out"
 }
 
@@ -1748,6 +1751,8 @@ job_file() {
 		# A text file holds no NUL byte.
 		read_lines raw "$JOB_OUT/head"
 		for line in "${raw[@]:0:TEXT_LINES}"; do
+			# The pane shows the start of a line. An old bash needs seconds to replace text in a long one.
+			line=${line:0:1024}
 			line=${line//$'\t'/    }
 			text+=("${line//[[:cntrl:]]/}")
 		done
@@ -2493,7 +2498,6 @@ preview_timeout() {
 # bashfs: end preview.bash
 # bashfs: begin draw.bash
 # Drawing. Every function appends to FRAME, and flush writes the frame once.
-# Each part of the screen has a dirty flag, so a key press sends few bytes.
 
 flush() {
 	[[ -n $FRAME ]] || return 0
@@ -2636,9 +2640,9 @@ draw_details() {
 	done
 }
 
-# Draws the preview pane. PV_PAINTED remembers what is on the screen. An
-# empty pane is not erased again and a new stage of an image replaces the
-# old stage without a blank moment.
+# Draws the preview pane. PV_PAINTED remembers what is on the screen. An empty
+# pane is not erased again and a new stage of an image replaces the stage
+# without a blank moment.
 draw_preview() {
 	(( P_H > 0 )) || return 0
 	local want=$PV_KIND

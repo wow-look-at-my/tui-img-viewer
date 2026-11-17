@@ -50,12 +50,11 @@ radiance_planes() {
 	local -a rows
 	RAD_ROWS=0 RAD_FORMAT=gbrap RAD_LINE=()
 
-	hex=$(od -An -v -tx1 -j "$offset" -- "$file") || return 1
-	# GNU od puts one space before each byte and BSD od puts more. The decoder needs exactly one.
-	hex=" ${hex//$'\n'/ }"
-	while [[ $hex == *'  '* ]]; do
-		hex=${hex//  / }
-	done
+	# The decoder needs exactly one space before each byte, and od gives more
+	# on some hosts. An old bash is very slow when it replaces text in a long
+	# string, so tr and sed do that work in this function.
+	hex=$(set -o pipefail; od -An -v -tx1 -j "$offset" -- "$file" | tr -s ' \n' ' ') || return 1
+	hex=" ${hex# }"
 	hex=${hex% }
 	# A file with no run-length coding holds a few bytes for each pixel.
 	if (( ${#hex} / 3 == width * height * 4 )) && [[ ${hex:0:6} != ' 02 02' ]]; then
@@ -70,7 +69,9 @@ radiance_planes() {
 	# the markers finds the lines without a walk through all the data.
 	printf -v marker ' 02 02 %02x %02x' $(( width >> 8 )) $(( width & 255 ))
 	# The cut drops an empty line, and the data must start with a marker.
-	IFS=$'\n' read -r -d '' -a rows <<< "${hex//"$marker"/$'\n'}"
+	local nl=$'\n' cut
+	cut=$(printf '%s' "$hex" | sed "s/$marker/\\$nl/g")
+	IFS=$'\n' read -r -d '' -a rows <<< "$cut"
 	local fast=1
 	(( ${#rows[@]} == height )) && [[ $hex == "$marker"* ]] || fast=0
 
@@ -111,7 +112,7 @@ radiance_planes() {
 	(( RAD_ROWS > 0 )) || return 1
 	# The plane order of the pixel format: green, blue, red, then the exponent.
 	for ch in 1 2 0 3; do
-		printf '%b' "${plane[ch]// /\\x}"
+		printf '%b' "$(printf '%s' "${plane[ch]}" | sed 's/ /\\x/g')"
 	done > "$out"
 }
 

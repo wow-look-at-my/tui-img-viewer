@@ -12,8 +12,9 @@ META_TPHOTO=-1 META_TSPP=-1 META_TEXTRA=0 META_TCOMP=-1
 # Empties every result.
 meta_clear() {
 	local key
+	# An old bash keeps the value when printf -v writes an empty text.
 	for key in $META_KEYS; do
-		printf -v "META_$key" ''
+		eval "META_$key="
 	done
 }
 meta_clear
