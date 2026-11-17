@@ -208,9 +208,12 @@ tests:
 			- "images: 0"
 			- "graphics query: yes"
 
+	# tmux also gets no answer from this terminal. It then draws the whole screen
+	# again one time, and it drops image data that waits behind that drawing.
+	# The byte counts of tmux do not show such a loss, so the key comes later.
 	- desc: a terminal that answers nothing still gets the image, at a fixed rate
 	  timeout: 90s
-	  cmd: FAKE_MUTE=1 bash dats/lib/drive.sh dats/fixtures/browse w:3.8 shot:mute k:j w:6
+	  cmd: FAKE_MUTE=1 bash dats/lib/drive.sh dats/fixtures/browse w:5.5 shot:mute k:j w:6
 	  outputs:
 		stdout:
 			- "the terminal does not answer: no flow control"
