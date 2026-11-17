@@ -24,6 +24,9 @@ if [[ ! -x $dir/bash ]]; then
 	if ! (
 		cd "$src/bash-$version"
 		# The source is older than the C standard of a current compiler.
+		# The archive holds the generated parser. It must look newer than
+		# its source, or make asks for yacc.
+		touch y.tab.c y.tab.h
 		ac_cv_func_working_mktime=yes ./configure --without-bash-malloc --disable-nls CFLAGS='-O1 -std=gnu89 -w'
 		make -j "$(nproc)"
 	) > "$src/build.log" 2>&1; then

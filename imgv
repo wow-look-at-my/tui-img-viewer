@@ -2837,6 +2837,7 @@ input_wait() {
 	if (( ${#INBUF} != before )); then
 		now_ms
 		INBUF_AT=$NOW
+		[[ -n ${IMGV_DEBUG-} ]] && printf '%s wait=%s rc=%s mode=%s buf=%q\n' "$NOW" "$wait" "${rc-}" "$MODE" "$INBUF" >> "$IMGV_DEBUG"
 	fi
 	return 0
 }
