@@ -1,10 +1,15 @@
 # Background preview jobs. One job reads one file and writes its results into
 # its own directory.
 
-# Starts a job in the background. Sets JOB_PID.
+# Starts a job in the background. Sets JOB_PID. A subshell starts the job and
+# ends at once, so the job is not a child of this shell.
 job_spawn() {
-	job_main "$@" </dev/null >/dev/null 2>&1 &
-	JOB_PID=$!
+	local dir=$3
+	(
+		job_main "$@" </dev/null >/dev/null 2>&1 &
+		echo "$!" > "$dir/pid"
+	)
+	read -r JOB_PID < "$dir/pid" || JOB_PID=0
 }
 
 job_main() {
