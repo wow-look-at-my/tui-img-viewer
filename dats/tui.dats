@@ -12,9 +12,9 @@ shared:
 				fi
 			done < <(find dats/fixtures/browse -type f -print0)
 			exit "$rc"
-		stat: |
+		xargs: |
 			#!/bin/sh
-			echo 'stat: broken on purpose' >&2
+			echo 'xargs: broken on purpose' >&2
 			exit 1
 		od: |
 			#!/bin/sh
@@ -50,11 +50,11 @@ tests:
 
 	- desc: a listing that fails shows the reason in the footer
 	  timeout: 60s
-	  cmd: mkdir -p {outputs.bin} && cp {shared.stat} {outputs.bin}/stat && chmod +x {outputs.bin}/stat && IMGV_PATH={outputs.bin}:${IMGV_PATH:-$PATH} bash dats/lib/drive.sh dats/fixtures/browse w:1.5 shot:broken
+	  cmd: mkdir -p {outputs.bin} && cp {shared.xargs} {outputs.bin}/xargs && chmod +x {outputs.bin}/xargs && IMGV_PATH={outputs.bin}:${IMGV_PATH:-$PATH} bash dats/lib/drive.sh dats/fixtures/browse w:1.5 shot:broken
 	  outputs:
 		stdout:
 			- " (empty)"
-			- "cannot list this directory: stat: broken on purpose"
+			- "cannot list this directory: xargs: broken on purpose"
 			- "0/0  name  normal"
 
 	- desc: a host whose od cannot read bytes says so in the footer
