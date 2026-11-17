@@ -20,7 +20,15 @@ A terminal file browser whose main job is image previews. It is one bash script,
 
 ## Install
 
-Copy the file `imgv` to the remote host and make it executable. Nothing else is needed.
+CI publishes `imgv` to buildhost from `master`. With Homebrew:
+
+```bash
+brew install pazer/build/imgv
+```
+
+The repository is private. The buildhost project is private too. Tap the authenticated tap with a read token first, as the buildhost docs describe.
+
+Or copy the file `imgv` to the remote host and make it executable. Nothing else is needed.
 
 ```bash
 scp imgv remote:~/bin/imgv && ssh remote chmod +x '~/bin/imgv'
