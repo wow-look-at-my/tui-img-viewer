@@ -26,7 +26,8 @@ if [[ ! -x $dir/bash ]]; then
 		# The source is older than the C standard of a current compiler. The archive holds the generated parser.
 		touch y.tab.c y.tab.h
 		ac_cv_func_working_mktime=yes ./configure --without-bash-malloc --disable-nls CFLAGS='-O1 -std=gnu89 -w'
-		make -j "$(nproc)"
+		# The parallel build of this old source can fail. One more pass, in order, finishes it or ends on the real error.
+		make -j "$(nproc)" || make
 	) > "$src/build.log" 2>&1; then
 		tail -n 40 "$src/build.log" >&2
 		exit 1
