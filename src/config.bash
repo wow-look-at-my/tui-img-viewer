@@ -7,6 +7,7 @@ readonly PROG=imgv
 readonly TICK_IDLE_S=0.25     # loop period when nothing is pending
 readonly TICK_BUSY_S=0.02     # loop period while a job or a timer is pending
 readonly ESC_WAIT_MS=50       # an escape sequence that stays open this long is dropped
+readonly KEYS_RECENT_MS=2000  # an older bash looks for keys at the busy period this long after a key
 readonly DEBOUNCE_MS=120      # the selection must rest this long before a job starts
 readonly HANDSHAKE_MS=3000    # wait this long for the terminal to answer the first queries
 readonly ACK_TIMEOUT_MS=4000  # wait this long for one acknowledgement
@@ -54,7 +55,7 @@ state_init() {
 	# The stat options that print the size and time of an entry, and its mode and owner.
 	STAT_LIST=() STAT_MODE=()
 	# What this bash and the tools of this host can do.
-	READ_FRAC=0 NAP=() SORT_NAME=() TIME_BUILTIN=0 DATE_OPT=-d DATE_PRE=@
+	READ_FRAC=0 NAP=() NAP_IDLE=() SORT_NAME=() TIME_BUILTIN=0 DATE_OPT=-d DATE_PRE=@
 
 	# Options.
 	QUALITY=2 SHOW_HIDDEN=0 SORT=name RATE_BPS=131072 START_PATH=.
@@ -77,7 +78,7 @@ state_init() {
 	SEARCH='' SEARCH_FROM=0
 
 	# Bytes from the terminal that are not handled yet.
-	INBUF='' INBUF_AT=0 KEY='' EARLY_FAILS=0
+	INBUF='' INBUF_AT=0 KEY=''
 
 	# Preview pipeline.
 	PENDING=0 PENDING_AT=0

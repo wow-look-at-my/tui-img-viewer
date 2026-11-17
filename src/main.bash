@@ -99,11 +99,11 @@ probe_host() {
 	(( major > 4 || (major == 4 && minor >= 2) )) && TIME_BUILTIN=1
 	if (( ! READ_FRAC )); then
 		if sleep "$TICK_BUSY_S" 2>/dev/null; then
-			NAP=(sleep "$TICK_BUSY_S")
+			NAP=(sleep "$TICK_BUSY_S") NAP_IDLE=(sleep "$TICK_IDLE_S")
 		elif command -v usleep >/dev/null; then
-			NAP=(usleep 20000)
+			NAP=(usleep 20000) NAP_IDLE=(usleep 250000)
 		else
-			NAP=(sleep 1)
+			NAP=(sleep 1) NAP_IDLE=(sleep 1)
 			status 'this host has no short sleep: the screen follows slowly'
 		fi
 	fi

@@ -14,11 +14,6 @@ input_poll() {
 	INBUF+=$part
 }
 
-# Sleeps for one busy tick. Only a bash with no short read timeout calls it.
-nap() {
-	"${NAP[@]}"
-}
-
 # Collects input. $1 says how long to wait for the first byte: "none",
 # "busy" for one short tick, or "idle" for a long one.
 input_wait() {
@@ -40,30 +35,18 @@ input_wait() {
 				# End of input: the terminal is gone.
 				RUNNING=0
 			fi
-		elif [[ $wait == busy ]]; then
-			nap
-			input_poll
 		else
-			now_ms
-			local t0=$NOW
-			c=
-			IFS= read -r -n 1 -d '' -t 1 c
-			rc=$?
-			if [[ -n $c ]]; then
-				INBUF+=$c
-				input_poll
-			elif (( rc == 0 || rc > 128 )); then
-				EARLY_FAILS=0
+			# The timed read of an older bash can drop the key that arrives
+			# at the end of the time. That bash sleeps and then looks. The
+			# sleep is short while a key was recent.
+			if [[ $wait == busy ]] || (( NOW - INBUF_AT < KEYS_RECENT_MS )); then
+				"${NAP[@]}"
 			else
-				# The oldest bash gives one status for a timeout and for the
-				# end of input. A read that fails early saw the end of input.
-				now_ms
-				if (( NOW - t0 < 500 )); then
-					(( ++EARLY_FAILS >= 3 )) && RUNNING=0
-				else
-					EARLY_FAILS=0
-				fi
+				"${NAP_IDLE[@]}"
+				# A look gives no sign that the terminal is gone.
+				[[ -t 0 ]] || RUNNING=0
 			fi
+			input_poll
 		fi
 	fi
 	if (( ${#INBUF} != before )); then

@@ -17,6 +17,7 @@ readonly PROG=imgv
 readonly TICK_IDLE_S=0.25     # loop period when nothing is pending
 readonly TICK_BUSY_S=0.02     # loop period while a job or a timer is pending
 readonly ESC_WAIT_MS=50       # an escape sequence that stays open this long is dropped
+readonly KEYS_RECENT_MS=2000  # an older bash looks for keys at the busy period this long after a key
 readonly DEBOUNCE_MS=120      # the selection must rest this long before a job starts
 readonly HANDSHAKE_MS=3000    # wait this long for the terminal to answer the first queries
 readonly ACK_TIMEOUT_MS=4000  # wait this long for one acknowledgement
@@ -64,7 +65,7 @@ state_init() {
 	# The stat options that print the size and time of an entry, and its mode and owner.
 	STAT_LIST=() STAT_MODE=()
 	# What this bash and the tools of this host can do.
-	READ_FRAC=0 NAP=() SORT_NAME=() TIME_BUILTIN=0 DATE_OPT=-d DATE_PRE=@
+	READ_FRAC=0 NAP=() NAP_IDLE=() SORT_NAME=() TIME_BUILTIN=0 DATE_OPT=-d DATE_PRE=@
 
 	# Options.
 	QUALITY=2 SHOW_HIDDEN=0 SORT=name RATE_BPS=131072 START_PATH=.
@@ -87,7 +88,7 @@ state_init() {
 	SEARCH='' SEARCH_FROM=0
 
 	# Bytes from the terminal that are not handled yet.
-	INBUF='' INBUF_AT=0 KEY='' EARLY_FAILS=0
+	INBUF='' INBUF_AT=0 KEY=''
 
 	# Preview pipeline.
 	PENDING=0 PENDING_AT=0
@@ -2782,11 +2783,6 @@ input_poll() {
 	INBUF+=$part
 }
 
-# Sleeps for one busy tick. Only a bash with no short read timeout calls it.
-nap() {
-	"${NAP[@]}"
-}
-
 # Collects input. $1 says how long to wait for the first byte: "none",
 # "busy" for one short tick, or "idle" for a long one.
 input_wait() {
@@ -2808,30 +2804,18 @@ input_wait() {
 				# End of input: the terminal is gone.
 				RUNNING=0
 			fi
-		elif [[ $wait == busy ]]; then
-			nap
-			input_poll
 		else
-			now_ms
-			local t0=$NOW
-			c=
-			IFS= read -r -n 1 -d '' -t 1 c
-			rc=$?
-			if [[ -n $c ]]; then
-				INBUF+=$c
-				input_poll
-			elif (( rc == 0 || rc > 128 )); then
-				EARLY_FAILS=0
+			# The timed read of an older bash can drop the key that arrives
+			# at the end of the time. That bash sleeps and then looks. The
+			# sleep is short while a key was recent.
+			if [[ $wait == busy ]] || (( NOW - INBUF_AT < KEYS_RECENT_MS )); then
+				"${NAP[@]}"
 			else
-				# The oldest bash gives one status for a timeout and for the
-				# end of input. A read that fails early saw the end of input.
-				now_ms
-				if (( NOW - t0 < 500 )); then
-					(( ++EARLY_FAILS >= 3 )) && RUNNING=0
-				else
-					EARLY_FAILS=0
-				fi
+				"${NAP_IDLE[@]}"
+				# A look gives no sign that the terminal is gone.
+				[[ -t 0 ]] || RUNNING=0
 			fi
+			input_poll
 		fi
 	fi
 	if (( ${#INBUF} != before )); then
@@ -3197,11 +3181,11 @@ probe_host() {
 	(( major > 4 || (major == 4 && minor >= 2) )) && TIME_BUILTIN=1
 	if (( ! READ_FRAC )); then
 		if sleep "$TICK_BUSY_S" 2>/dev/null; then
-			NAP=(sleep "$TICK_BUSY_S")
+			NAP=(sleep "$TICK_BUSY_S") NAP_IDLE=(sleep "$TICK_IDLE_S")
 		elif command -v usleep >/dev/null; then
-			NAP=(usleep 20000)
+			NAP=(usleep 20000) NAP_IDLE=(usleep 250000)
 		else
-			NAP=(sleep 1)
+			NAP=(sleep 1) NAP_IDLE=(sleep 1)
 			status 'this host has no short sleep: the screen follows slowly'
 		fi
 	fi

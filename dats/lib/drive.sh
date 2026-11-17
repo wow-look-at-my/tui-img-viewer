@@ -128,4 +128,8 @@ if LC_ALL=C grep -q $'\xf4\x8e\xbb\xae' "$work/stream"; then
 else
 	echo 'image cells on the terminal: no'
 fi
-rm -rf -- "$work"
+if [[ -n ${KEEP_WORK-} ]]; then
+	echo "work directory: $work"
+else
+	rm -rf -- "$work"
+fi
