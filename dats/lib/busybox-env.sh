@@ -17,19 +17,24 @@ for tool in tmux ffmpeg ffprobe; do
 done
 
 if [[ ! -x $dir/bash ]]; then
+	# The parser in the archive is older than its source, so the build makes it again.
+	if ! command -v bison > /dev/null && ! command -v yacc > /dev/null; then
+		echo 'busybox-env.sh: the build of bash needs bison or yacc' >&2
+		exit 1
+	fi
 	src=$(mktemp -d)
 	curl -fsSL -o "$src/bash.tar.gz" "https://ftp.gnu.org/gnu/bash/bash-$version.tar.gz"
 	echo "$sha256  $src/bash.tar.gz" | sha256sum -c - > /dev/null
 	tar -xzf "$src/bash.tar.gz" -C "$src"
 	if ! (
 		cd "$src/bash-$version"
-		# The source is older than the C standard of a current compiler. The archive holds the generated parser.
-		touch y.tab.c y.tab.h
+		# The source is older than the C standard of a current compiler.
 		ac_cv_func_working_mktime=yes ./configure --without-bash-malloc --disable-nls CFLAGS='-O1 -std=gnu89 -w'
-		# The parallel build of this old source can fail. One more pass, in order, finishes it or ends on the real error.
-		make -j "$(nproc)" || make
+		make -j "$(nproc)"
 	) > "$src/build.log" 2>&1; then
-		tail -n 40 "$src/build.log" >&2
+		# The parallel build writes much after the error, so the error lines come first.
+		grep -i -B 3 -A 8 'error' "$src/build.log" | tail -n 60 >&2 || true
+		tail -n 5 "$src/build.log" >&2
 		exit 1
 	fi
 	cp "$src/bash-$version/bash" "$dir/bash"
