@@ -69,15 +69,16 @@ radiance_planes() {
 	# Each scan line starts with a marker that holds the width. A cut at
 	# the markers finds the lines without a walk through all the data.
 	printf -v marker ' 02 02 %02x %02x' $(( width >> 8 )) $(( width & 255 ))
-	mapfile -t rows <<< "${hex//"$marker"/$'\n'}"
+	# The cut drops an empty line, and the data must start with a marker.
+	IFS=$'\n' read -r -d '' -a rows <<< "${hex//"$marker"/$'\n'}"
 	local fast=1
-	(( ${#rows[@]} == height + 1 )) && [[ -z ${rows[0]} ]] || fast=0
+	(( ${#rows[@]} == height )) && [[ $hex == "$marker"* ]] || fast=0
 
 	# Each plane collects its lines as hex text.
 	local -a plane=('' '' '' '')
 	if (( fast )); then
 		for (( i = 0; i < height; i += step )); do
-			RAD_HEX=${rows[i + 1]} RAD_POS=0
+			RAD_HEX=${rows[i]} RAD_POS=0
 			# A marker pattern inside the data gives a line of the wrong size.
 			if ! radiance_row "$width" 1 || (( RAD_POS * 3 != ${#RAD_HEX} )); then
 				fast=0

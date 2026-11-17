@@ -24,8 +24,8 @@ clear_rect() {
 draw_header() {
 	local path=$PWD width=$(( COLS - 2 ))
 	[[ $path == "$HOME" || $path == "$HOME"/* ]] && path="~${path#"$HOME"}"
-	(( ${#path} > width && width > 1 )) && path="…${path: -$(( width - 1 ))}"
-	fit "$path" "$width"
+	fit_tail "$path" "$width"
+	fit "$REPLY" "$width"
 	at 1 1
 	FRAME+="$S_BAR $REPLY $S_RESET"
 }
@@ -111,10 +111,13 @@ draw_separators() {
 details_compose() {
 	DET=()
 	(( N > 0 )) || return 0
-	local when
+	# The time text can need the date program, so it is kept for the next draw.
+	if [[ $WHEN_FOR != "${E_MTIME[CUR]}" ]]; then
+		time_text "${E_MTIME[CUR]}"
+		WHEN_FOR=${E_MTIME[CUR]} WHEN_TEXT=$REPLY
+	fi
 	human_size "${E_SIZE[CUR]}"
-	printf -v when '%(%Y-%m-%d %H:%M)T' "${E_MTIME[CUR]}"
-	DET+=("Name"$'\t'"${E_NAME[CUR]}" "File"$'\t'"$REPLY · $when")
+	DET+=("Name"$'\t'"${E_NAME[CUR]}" "File"$'\t'"$REPLY · $WHEN_TEXT")
 	(( ${#JOB_INFO[@]} )) && DET+=("${JOB_INFO[@]}")
 	preview_status
 	[[ -n $REPLY ]] || return 0
@@ -163,8 +166,13 @@ draw_preview() {
 		msg | error)
 			local style=$S_DIM msg=$PV_MSG
 			[[ $PV_KIND == error ]] && style=$S_ERR
-			(( ${#msg} > P_W )) && msg="${msg:0:P_W-1}…"
-			at $(( P_Y + P_H / 2 )) $(( P_X + (P_W - ${#msg}) / 2 ))
+			text_width "$msg"
+			local cells=$REPLY
+			if (( cells > P_W )); then
+				fit "$msg" "$P_W"
+				msg=$REPLY cells=$P_W
+			fi
+			at $(( P_Y + P_H / 2 )) $(( P_X + (P_W - cells) / 2 ))
 			FRAME+="$style$msg$S_RESET"
 			PV_PAINTED=$PV_KIND
 			;;

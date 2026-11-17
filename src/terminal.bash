@@ -2,7 +2,11 @@
 
 term_init() {
 	STTY_SAVED=$(stty -g) || die 'cannot read the terminal settings'
-	stty -echo -icanon -ixon min 1 time 0
+	# With "min 0" a read takes the bytes that wait and never blocks.
+	if ! stty -echo -icanon -ixon -icrnl min 0 time 0; then
+		stty "$STTY_SAVED"
+		die 'cannot set the terminal mode'
+	fi
 	# Alternate screen, hidden cursor, no automatic line wrap.
 	printf '\e[?1049h\e[?25l\e[?7l'
 	TERM_READY=1

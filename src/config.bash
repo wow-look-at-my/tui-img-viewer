@@ -6,7 +6,7 @@ readonly PROG=imgv
 # Timing. Names that end in _S hold seconds, names that end in _MS hold milliseconds.
 readonly TICK_IDLE_S=0.25     # loop period when nothing is pending
 readonly TICK_BUSY_S=0.02     # loop period while a job or a timer is pending
-readonly ESC_WAIT_S=0.05      # longest gap inside one escape sequence
+readonly ESC_WAIT_MS=50       # an escape sequence that stays open this long is dropped
 readonly DEBOUNCE_MS=120      # the selection must rest this long before a job starts
 readonly HANDSHAKE_MS=3000    # wait this long for the terminal to answer the first queries
 readonly ACK_TIMEOUT_MS=4000  # wait this long for one acknowledgement
@@ -53,6 +53,8 @@ state_init() {
 	HAVE_FFMPEG=0 HAVE_FFPROBE=0 HAVE_FILE=0
 	# The stat options that print the size and time of an entry, and its mode and owner.
 	STAT_LIST=() STAT_MODE=()
+	# What this bash and the tools of this host can do.
+	READ_FRAC=0 NAP=() SORT_NAME=() TIME_BUILTIN=0 DATE_AT=()
 
 	# Options.
 	QUALITY=2 SHOW_HIDDEN=0 SORT=name RATE_BPS=131072 START_PATH=.
@@ -70,8 +72,12 @@ state_init() {
 	# Directory listing.
 	N=0 CUR=0 TOP=0
 	E_NAME=() E_KIND=() E_LINK=() E_SIZE=() E_MTIME=() E_IMG=()
-	declare -gA DIR_SEL=()
+	SEL_DIR=() SEL_NAME=()
+	WHEN_FOR='' WHEN_TEXT=''
 	SEARCH='' SEARCH_FROM=0
+
+	# Bytes from the terminal that are not handled yet.
+	INBUF='' INBUF_AT=0 KEY='' EARLY_FAILS=0
 
 	# Preview pipeline.
 	PENDING=0 PENDING_AT=0
@@ -81,8 +87,7 @@ state_init() {
 	PV_KIND=none PV_MSG='' PV_TEXT=() PV_PAINTED=''
 	IMG_W=0 IMG_H=0 STAGES=0 STAGE_DONE=0 TX_STAGE=0 STAGE_W=0 STAGE_H=0 STAGE_BYTES=0
 	BOX_X=0 BOX_Y=0 BOX_C=0 BOX_R=0
-	declare -gA CACHE=()
-	CACHE_ORDER=()
+	CACHE_KEY=() CACHE_DIR=()
 
 	# Graphics and link state.
 	GFX=unknown ACK_MODE=unknown
@@ -92,7 +97,7 @@ state_init() {
 	PROBES=0 ACKS=0 ACK_SEEN=0 ACK_MISSES=0
 	RTT_MS=0 LINK_BPS=0 WIN_CAP=$WIN_MAX
 	FOCUS_AT=-100000 FOCUS_OK=0
-	TX_ACTIVE=0 TX_FD=0 TX_ID=0 TX_STARTED=0 TX_EOF=0 TX_WAIT=0 TX_PAUSED=0
+	TX_ACTIVE=0 TX_NEXT='' TX_ID=0 TX_STARTED=0 TX_EOF=0 TX_WAIT=0 TX_PAUSED=0
 	TX_TOTAL=0 TX_SENT=0 TX_WIN=$WIN_START
 	RATE_NOW=0 TX_DISCARDED=0 TX_CHECK_UNTIL=0 TX_CHECK_AT=0 TMUX_TAKEN=0 TMUX_DISCARDED=0
 	TX_BASE=-1 TX_LOST=0 TX_RETRY_AT=0 TX_WIN_SENT=0 TX_WIN_AT=0 TX_PROBE_AT=0 TX_NEED=0

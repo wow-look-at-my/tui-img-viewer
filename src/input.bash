@@ -1,68 +1,154 @@
 # Keyboard input. The answers of the terminal arrive on the same stream.
+#
+# The terminal is in a mode where a read never blocks. One plain read then
+# takes every byte that waits, on each bash version. INBUF collects the
+# bytes, and input_dispatch takes whole keys and whole sequences from it.
 
-# Reads one key with the timeout $1, in seconds. Sets KEY, which stays empty
-# for input that is not a key. Fails when no input arrived in time.
-read_key() {
-	local c
-	KEY=
-	IFS= read -rsN1 -t "$1" c
-	local rc=$?
-	if (( rc > 128 )); then
-		return 1
-	elif (( rc != 0 )); then
-		# End of input: the terminal is gone.
-		RUNNING=0
-		return 1
+# Appends the bytes that wait on the terminal to INBUF.
+input_poll() {
+	local part
+	while IFS= read -r part; do
+		# A line feed ended this read, and it is input too.
+		INBUF+=$part$'\n'
+	done
+	INBUF+=$part
+}
+
+# Sleeps for one busy tick. Only a bash with no short read timeout calls it.
+nap() {
+	"${NAP[@]}"
+}
+
+# Collects input. $1 says how long to wait for the first byte: "none",
+# "busy" for one short tick, or "idle" for a long one.
+input_wait() {
+	local wait=$1 before=${#INBUF} c rc
+	input_poll
+	if (( ${#INBUF} == before )) && [[ $wait != none ]]; then
+		if (( READ_FRAC )); then
+			local t=$TICK_IDLE_S
+			[[ $wait == busy ]] && t=$TICK_BUSY_S
+			# bash makes this read wait for one byte.
+			IFS= read -r -n 1 -d '' -t "$t" c
+			rc=$?
+			if (( rc == 0 )); then
+				INBUF+=$c
+				input_poll
+			elif (( rc <= 128 )); then
+				# End of input: the terminal is gone.
+				RUNNING=0
+			fi
+		elif [[ $wait == busy ]]; then
+			nap
+			input_poll
+		else
+			now_ms
+			local t0=$NOW
+			if IFS= read -r -n 1 -d '' -t 1 c; then
+				INBUF+=$c
+				input_poll
+			else
+				# This bash gives one status for a timeout and for the end of
+				# input. A read that fails early saw the end of input.
+				now_ms
+				if (( NOW - t0 < 500 )); then
+					(( ++EARLY_FAILS >= 3 )) && RUNNING=0
+				else
+					EARLY_FAILS=0
+				fi
+			fi
+		fi
 	fi
-	case $c in
-		$'\e') read_escape ;;
-		$'\n' | $'\r') KEY=ENTER ;;
-		$'\x7f' | $'\b') KEY=BS ;;
-		$'\t') KEY=TAB ;;
-		*) KEY=$c ;;
-	esac
+	if (( ${#INBUF} != before )); then
+		now_ms
+		INBUF_AT=$NOW
+	fi
 	return 0
 }
 
-read_escape() {
-	local c seq=''
-	if ! IFS= read -rsN1 -t "$ESC_WAIT_S" c; then
-		KEY=ESC
-		return
-	fi
-	case $c in
-		'[')
-			# A control sequence ends at the first byte from "@" to "~".
-			while IFS= read -rsN1 -t "$ESC_WAIT_S" c; do
-				[[ $c == [@-~] ]] && break
-				seq+=$c
-				(( ${#seq} > 32 )) && break
-			done
-			csi_dispatch "$seq" "$c"
-			;;
-		O)
-			IFS= read -rsN1 -t "$ESC_WAIT_S" c || return
-			csi_dispatch '' "$c"
-			;;
-		_ | P | ']' | '^')
-			read_string "$c"
-			;;
-	esac
+# Handles every whole key and answer in INBUF. A sequence that is not whole
+# stays there for the next call. NOW must be current.
+input_dispatch() {
+	local buf=$INBUF pos=0 c
+	local len=${#buf}
+	while (( pos < len && RUNNING )); do
+		c=${buf:pos:1}
+		KEY=
+		if [[ $c == $'\e' ]]; then
+			input_escape || break
+		else
+			(( pos++ ))
+			case $c in
+				$'\n' | $'\r') KEY=ENTER ;;
+				$'\x7f' | $'\b') KEY=BS ;;
+				$'\t') KEY=TAB ;;
+				*) KEY=$c ;;
+			esac
+		fi
+		[[ -n $KEY ]] && handle_key "$KEY"
+	done
+	INBUF=${buf:pos}
 }
 
-# Consumes a string sequence up to its terminator. $1 is the introducer.
-read_string() {
-	local c prev='' body=''
-	while IFS= read -rsN1 -t "$ESC_WAIT_S" c; do
-		[[ $c == $'\a' ]] && break
-		if [[ $prev == $'\e' && $c == $'\\' ]]; then
-			body=${body%$'\e'}
-			break
-		fi
-		body+=$c prev=$c
-		(( ${#body} > 256 )) && break
-	done
-	[[ $1 == _ ]] && gfx_reply "$body"
+# Takes the escape sequence at pos in buf, and moves pos behind it. Fails
+# when the end of the sequence did not arrive yet. A sequence that stays
+# open too long is dropped, and an escape byte with nothing after it is a key.
+input_escape() {
+	local c=${buf:pos + 1:1} i final=''
+	local late=$(( NOW - INBUF_AT >= ESC_WAIT_MS ))
+	case $c in
+		'')
+			(( late )) || return 1
+			KEY=ESC
+			(( pos++ ))
+			;;
+		'[')
+			# A control sequence ends at the first byte from "@" to "~".
+			for (( i = pos + 2; i < len && i < pos + 36; i++ )); do
+				final=${buf:i:1}
+				[[ $final == [@-~] ]] && break
+				final=
+			done
+			if [[ -n $final ]]; then
+				csi_dispatch "${buf:pos + 2:i - pos - 2}" "$final"
+				pos=$(( i + 1 ))
+			elif (( i < len || late )); then
+				pos=$i
+			else
+				return 1
+			fi
+			;;
+		O)
+			if (( pos + 2 < len )); then
+				csi_dispatch '' "${buf:pos + 2:1}"
+				(( pos += 3 ))
+			elif (( late )); then
+				pos=$len
+			else
+				return 1
+			fi
+			;;
+		_ | P | ']' | '^')
+			# A string sequence ends with a bell or with the string terminator.
+			local rest=${buf:pos + 2} st=$'\e\\'
+			local a=${rest%%$'\a'*} b=${rest%%"$st"*}
+			if (( ${#a} < ${#b} )); then
+				pos=$(( pos + 2 + ${#a} + 1 ))
+				b=$a
+			elif (( ${#b} < ${#rest} )); then
+				pos=$(( pos + 2 + ${#b} + 2 ))
+			elif (( late || ${#rest} > 256 )); then
+				pos=$len
+				return 0
+			else
+				return 1
+			fi
+			[[ $c == _ ]] && gfx_reply "$b"
+			;;
+		*)
+			(( pos += 2 ))
+			;;
+	esac
 	return 0
 }
 
@@ -103,13 +189,28 @@ search_key() {
 			if [[ -z $SEARCH ]]; then
 				MODE=normal
 			else
-				SEARCH=${SEARCH%?}
+				# One character can hold several bytes. Its first byte goes last.
+				local b=128
+				while [[ -n $SEARCH ]] && (( (b & 0xC0) == 0x80 )); do
+					printf -v b '%d' "'${SEARCH: -1}"
+					SEARCH=${SEARCH%?}
+				done
 				search_jump 1 "$SEARCH_FROM"
 			fi
 			;;
 		?)
 			SEARCH+=$1
-			search_jump 1 "$SEARCH_FROM" || status "no match for: $SEARCH"
+			# A character that is not ASCII arrives as several keys.
+			U_S=$SEARCH
+			local i=0
+			while (( i < ${#SEARCH} )); do
+				utf8_at "$i"
+				(( U_CP < 0 )) && break
+				(( i += U_LEN ))
+			done
+			if (( i == ${#SEARCH} )); then
+				search_jump 1 "$SEARCH_FROM" || status "no match for: $SEARCH"
+			fi
 			;;
 	esac
 	D_FOOTER=1

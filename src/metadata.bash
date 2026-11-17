@@ -1,12 +1,22 @@
 # Image header parser: reads the format, size and EXIF tags of an image file without decoding pixels.
 
-declare -gA META=()
+# The results. Each key K has a variable META_K, and an empty one means: not known.
+META_KEYS='alpha bits color data_offset datetime detail exposure fnumber focal format height iso lens make model orientation scan_order width'
 # Bytes of the last read, its file offset, and scratch results of the helpers.
-declare -ga META_B=()
-declare -gi META_BOFF=0 META_EOF=0 META_I=0 META_N=0 META_D=0 META_LE=0 META_XPTR=0
-declare -g META_S=""
+META_B=()
+META_BOFF=0 META_EOF=0 META_I=0 META_N=0 META_D=0 META_LE=0 META_XPTR=0
+META_S=""
 # TIFF image tags, kept until meta_tiff derives color and alpha from them.
-declare -gi META_TPHOTO=-1 META_TSPP=-1 META_TEXTRA=0 META_TCOMP=-1
+META_TPHOTO=-1 META_TSPP=-1 META_TEXTRA=0 META_TCOMP=-1
+
+# Empties every result.
+meta_clear() {
+	local key
+	for key in $META_KEYS; do
+		printf -v "META_$key" ''
+	done
+}
+meta_clear
 
 # meta_read FILE OFFSET COUNT loads up to COUNT bytes into META_B.
 meta_read() {
@@ -115,7 +125,7 @@ meta_dec1() {
 }
 
 meta_detail() {
-	META[detail]=${META[detail]:+${META[detail]},}$1
+	META_detail=${META_detail:+${META_detail},}$1
 }
 
 # meta_num FILE OFFSET TYPE reads the first value of a TIFF field. A RATIONAL
@@ -164,29 +174,29 @@ meta_tag() {
 		((tiff)) || return 0
 		meta_num "$f" "$at" "$type" || return 0
 		case $tag in
-		256) ((META_N > 0)) && META[width]=$META_N ;;
-		257) ((META_N > 0)) && META[height]=$META_N ;;
-		258) ((META_N > 0)) && META[bits]=$META_N ;;
+		256) ((META_N > 0)) && META_width=$META_N ;;
+		257) ((META_N > 0)) && META_height=$META_N ;;
+		258) ((META_N > 0)) && META_bits=$META_N ;;
 		259) META_TCOMP=$META_N ;;
 		262) META_TPHOTO=$META_N ;;
 		277) META_TSPP=$META_N ;;
 		esac
 		;;
 	338) ((tiff)) && META_TEXTRA=1 ;;
-	271) [[ $type == 2 ]] && meta_ascii "$f" "$at" "$7" && META[make]=$META_S ;;
-	272) [[ $type == 2 ]] && meta_ascii "$f" "$at" "$7" && META[model]=$META_S ;;
-	42036) [[ $type == 2 ]] && meta_ascii "$f" "$at" "$7" && META[lens]=$META_S ;;
+	271) [[ $type == 2 ]] && meta_ascii "$f" "$at" "$7" && META_make=$META_S ;;
+	272) [[ $type == 2 ]] && meta_ascii "$f" "$at" "$7" && META_model=$META_S ;;
+	42036) [[ $type == 2 ]] && meta_ascii "$f" "$at" "$7" && META_lens=$META_S ;;
 	306)
-		[[ $type == 2 && -z ${META[datetime]-} ]] && meta_ascii "$f" "$at" "$7" && META[datetime]=$META_S
+		[[ $type == 2 && -z ${META_datetime-} ]] && meta_ascii "$f" "$at" "$7" && META_datetime=$META_S
 		;;
-	36867) [[ $type == 2 ]] && meta_ascii "$f" "$at" "$7" && META[datetime]=$META_S ;;
+	36867) [[ $type == 2 ]] && meta_ascii "$f" "$at" "$7" && META_datetime=$META_S ;;
 	274)
 		meta_num "$f" "$at" "$type" || return 0
-		((META_N >= 1 && META_N <= 8)) && META[orientation]=$META_N
+		((META_N >= 1 && META_N <= 8)) && META_orientation=$META_N
 		;;
 	34855)
 		meta_num "$f" "$at" "$type" || return 0
-		((META_N > 0)) && META[iso]=$META_N
+		((META_N > 0)) && META_iso=$META_N
 		;;
 	34665)
 		meta_num "$f" "$at" "$type" || return 0
@@ -196,15 +206,15 @@ meta_tag() {
 		[[ $type == 5 ]] && meta_num "$f" "$at" 5 || return 0
 		((META_N > 0 && META_D > 0)) || return 0
 		if ((META_N < META_D)); then
-			META[exposure]=1/$(((META_D + META_N / 2) / META_N))
+			META_exposure=1/$(((META_D + META_N / 2) / META_N))
 		else
-			meta_dec1 "$META_N" "$META_D" && META[exposure]=$META_S
+			meta_dec1 "$META_N" "$META_D" && META_exposure=$META_S
 		fi
 		;;
 	33437 | 37386)
 		[[ $type == 5 ]] && meta_num "$f" "$at" 5 || return 0
 		((META_N > 0)) && meta_dec1 "$META_N" "$META_D" || return 0
-		if ((tag == 33437)); then META[fnumber]=$META_S; else META[focal]=$META_S; fi
+		if ((tag == 33437)); then META_fnumber=$META_S; else META_focal=$META_S; fi
 		;;
 	esac
 	return 0
@@ -277,16 +287,16 @@ meta_png() {
 	meta_be32 12
 	((META_N == 0x49484452)) || return 1
 	meta_be32 16
-	META[width]=$META_N
+	META_width=$META_N
 	meta_be32 20
-	META[height]=$META_N
-	META[bits]=${META_B[24]}
+	META_height=$META_N
+	META_bits=${META_B[24]}
 	case ${META_B[25]} in
-	0) META[color]=Gray ;;
-	2) META[color]=RGB ;;
-	3) META[color]=Palette ;;
-	4) META[color]=Gray+Alpha ;;
-	6) META[color]=RGBA ;;
+	0) META_color=Gray ;;
+	2) META_color=RGB ;;
+	3) META_color=Palette ;;
+	4) META_color=Gray+Alpha ;;
+	6) META_color=RGBA ;;
 	esac
 	[[ ${META_B[25]} == [46] ]] && trns=1
 	((META_B[28] == 1)) && meta_detail interlaced
@@ -305,13 +315,13 @@ meta_png() {
 		pos=$((pos + 12 + len))
 	done
 	((actl)) && meta_detail animated
-	META[alpha]=$trns
+	META_alpha=$trns
 	return 0
 }
 
 meta_jpeg() {
 	local f=$1 pos=2 seg fill m len
-	META[alpha]=0
+	META_alpha=0
 	for ((seg = 0; seg < 1024; seg++)); do
 		meta_need "$f" "$pos" 2 || return 1
 		((META_B[META_I] == 255)) || return 1
@@ -333,15 +343,15 @@ meta_jpeg() {
 		if ((m >= 0xc0 && m <= 0xcf && m != 0xc4 && m != 0xc8 && m != 0xcc)); then
 			((len >= 8)) || return 1
 			meta_need "$f" "$pos" 8 || return 1
-			META[bits]=${META_B[META_I + 2]}
+			META_bits=${META_B[META_I + 2]}
 			meta_be16 $((META_I + 3))
-			META[height]=$META_N
+			META_height=$META_N
 			meta_be16 $((META_I + 5))
-			META[width]=$META_N
+			META_width=$META_N
 			case ${META_B[META_I + 7]} in
-			1) META[color]=Gray ;;
-			3) META[color]=YCbCr ;;
-			4) META[color]=CMYK ;;
+			1) META_color=Gray ;;
+			3) META_color=YCbCr ;;
+			4) META_color=CMYK ;;
 			esac
 			case $m in
 			192) meta_detail baseline ;;
@@ -366,13 +376,13 @@ meta_jpeg() {
 meta_gif() {
 	meta_need "$1" 0 13 || return 1
 	meta_le16 6
-	META[width]=$META_N
+	META_width=$META_N
 	meta_le16 8
-	META[height]=$META_N
-	META[bits]=$(((META_B[10] & 7) + 1))
-	META[color]=Palette
-	META[alpha]=0
-	if ((META_B[4] == 55)); then META[detail]=GIF87a; else META[detail]=GIF89a; fi
+	META_height=$META_N
+	META_bits=$(((META_B[10] & 7) + 1))
+	META_color=Palette
+	META_alpha=0
+	if ((META_B[4] == 55)); then META_detail=GIF87a; else META_detail=GIF89a; fi
 }
 
 meta_bmp() {
@@ -408,36 +418,36 @@ meta_bmp() {
 	else
 		return 1
 	fi
-	META[width]=$w
-	META[height]=$h
+	META_width=$w
+	META_height=$h
 	case $bpp in
 	1 | 2 | 4 | 8)
-		META[bits]=$bpp
-		META[color]=Palette
+		META_bits=$bpp
+		META_color=Palette
 		;;
-	16) META[color]=RGB ;;
+	16) META_color=RGB ;;
 	24)
-		META[bits]=8
-		META[color]=RGB
+		META_bits=8
+		META_color=RGB
 		;;
 	32)
-		META[bits]=8
-		if ((amask)); then META[color]=RGBA; else META[color]=RGB; fi
+		META_bits=8
+		if ((amask)); then META_color=RGBA; else META_color=RGB; fi
 		;;
 	esac
-	if ((bpp == 32 && amask)); then META[alpha]=1; else META[alpha]=0; fi
+	if ((bpp == 32 && amask)); then META_alpha=1; else META_alpha=0; fi
 	case $comp in
 	0) ;;
-	1) META[detail]=BI_RLE8 ;;
-	2) META[detail]=BI_RLE4 ;;
-	3) META[detail]=BI_BITFIELDS ;;
-	4) META[detail]=BI_JPEG ;;
-	5) META[detail]=BI_PNG ;;
-	6) META[detail]=BI_ALPHABITFIELDS ;;
-	11) META[detail]=BI_CMYK ;;
-	12) META[detail]=BI_CMYKRLE8 ;;
-	13) META[detail]=BI_CMYKRLE4 ;;
-	*) META[detail]=$comp ;;
+	1) META_detail=BI_RLE8 ;;
+	2) META_detail=BI_RLE4 ;;
+	3) META_detail=BI_BITFIELDS ;;
+	4) META_detail=BI_JPEG ;;
+	5) META_detail=BI_PNG ;;
+	6) META_detail=BI_ALPHABITFIELDS ;;
+	11) META_detail=BI_CMYK ;;
+	12) META_detail=BI_CMYKRLE8 ;;
+	13) META_detail=BI_CMYKRLE4 ;;
+	*) META_detail=$comp ;;
 	esac
 	return 0
 }
@@ -447,22 +457,22 @@ meta_webp() {
 	meta_need "$f" 0 30 || return 1
 	meta_be32 12
 	type=$META_N
-	META[bits]=8
+	META_bits=8
 	case $type in
 	$((0x56503820)))
 		((META_B[23] == 0x9d && META_B[24] == 1 && META_B[25] == 0x2a)) || return 1
 		meta_le16 26
-		META[width]=$((META_N & 0x3fff))
+		META_width=$((META_N & 0x3fff))
 		meta_le16 28
-		META[height]=$((META_N & 0x3fff))
+		META_height=$((META_N & 0x3fff))
 		codec=lossy
 		;;
 	$((0x5650384c)))
 		# "VP8L": the signature byte 0x2f, the sizes minus one, then the alpha bit.
 		((META_B[20] == 0x2f)) || return 1
 		meta_le32 21
-		META[width]=$(((META_N & 0x3fff) + 1))
-		META[height]=$((((META_N >> 14) & 0x3fff) + 1))
+		META_width=$(((META_N & 0x3fff) + 1))
+		META_height=$((((META_N >> 14) & 0x3fff) + 1))
 		alpha=$(((META_N >> 28) & 1))
 		codec=lossless
 		;;
@@ -472,8 +482,8 @@ meta_webp() {
 		alpha=$(((flags >> 4) & 1))
 		anim=$(((flags >> 1) & 1))
 		exif=$(((flags >> 3) & 1))
-		META[width]=$(((META_B[24] | META_B[25] << 8 | META_B[26] << 16) + 1))
-		META[height]=$(((META_B[27] | META_B[28] << 8 | META_B[29] << 16) + 1))
+		META_width=$(((META_B[24] | META_B[25] << 8 | META_B[26] << 16) + 1))
+		META_height=$(((META_B[27] | META_B[28] << 8 | META_B[29] << 16) + 1))
 		pos=30
 		for ((i = 0; i < 1024; i++)); do
 			[[ -z $codec ]] || ((exif)) || break
@@ -507,13 +517,13 @@ meta_webp() {
 	esac
 	[[ -n $codec ]] && meta_detail "$codec"
 	((anim)) && meta_detail animated
-	META[alpha]=$alpha
+	META_alpha=$alpha
 	if ((alpha)); then
-		META[color]=RGBA
+		META_color=RGBA
 	elif [[ $codec == lossy ]]; then
-		META[color]=YCbCr
+		META_color=YCbCr
 	elif [[ $codec == lossless ]]; then
-		META[color]=RGB
+		META_color=RGB
 	fi
 	return 0
 }
@@ -526,22 +536,22 @@ meta_tiff() {
 	# An extra sample needs a second sample to sit next to.
 	alpha=0
 	((META_TEXTRA && (META_TSPP == -1 || META_TSPP >= 2))) && alpha=1
-	META[alpha]=$alpha
+	META_alpha=$alpha
 	case $META_TPHOTO in
-	0 | 1) if ((alpha)); then META[color]=Gray+Alpha; else META[color]=Gray; fi ;;
-	2) if ((alpha)); then META[color]=RGBA; else META[color]=RGB; fi ;;
-	3) META[color]=Palette ;;
-	5) META[color]=CMYK ;;
-	6) META[color]=YCbCr ;;
+	0 | 1) if ((alpha)); then META_color=Gray+Alpha; else META_color=Gray; fi ;;
+	2) if ((alpha)); then META_color=RGBA; else META_color=RGB; fi ;;
+	3) META_color=Palette ;;
+	5) META_color=CMYK ;;
+	6) META_color=YCbCr ;;
 	esac
 	case $META_TCOMP in
 	-1) ;;
-	1) META[detail]=None ;;
-	5) META[detail]=LZW ;;
-	6 | 7) META[detail]=JPEG ;;
-	8 | 32946) META[detail]=Deflate ;;
-	32773) META[detail]=PackBits ;;
-	*) META[detail]=$META_TCOMP ;;
+	1) META_detail=None ;;
+	5) META_detail=LZW ;;
+	6 | 7) META_detail=JPEG ;;
+	8 | 32946) META_detail=Deflate ;;
+	32773) META_detail=PackBits ;;
+	*) META_detail=$META_TCOMP ;;
 	esac
 	return 0
 }
@@ -596,9 +606,9 @@ meta_exr() {
 			meta_sle32 $((META_I + 4))
 			y0=$META_N
 			meta_sle32 $((META_I + 8))
-			META[width]=$((META_N - x0 + 1))
+			META_width=$((META_N - x0 + 1))
 			meta_sle32 $((META_I + 12))
-			META[height]=$((META_N - y0 + 1))
+			META_height=$((META_N - y0 + 1))
 			;;
 		channels:chlist)
 			meta_chlist "$f" "$vpos" $((vpos + size)) || return 1
@@ -612,26 +622,26 @@ meta_exr() {
 		esac
 		pos=$((vpos + size))
 	done
-	((i < 256 && ptype >= 0 && comp >= 0)) && [[ -n ${META[width]-} ]] || return 1
+	((i < 256 && ptype >= 0 && comp >= 0)) && [[ -n ${META_width-} ]] || return 1
 	case $ptype in
-	0) META[bits]=32 && d=uint ;;
-	1) META[bits]=16 && d=half ;;
-	2) META[bits]=32 && d=float ;;
+	0) META_bits=32 && d=uint ;;
+	1) META_bits=16 && d=half ;;
+	2) META_bits=32 && d=float ;;
 	*) return 1 ;;
 	esac
 	if ((comp < ${#cnames[@]})); then d="${cnames[comp]}, $d"; else d="$comp, $d"; fi
 	((ver & 0x200)) && d+=", tiled"
 	((ver & 0x1000)) && d+=", multi-part"
 	((ver & 0x800)) && d+=", deep"
-	META[detail]=$d
+	META_detail=$d
 	if [[ $chans == *" R "* && $chans == *" G "* && $chans == *" B "* ]]; then
-		if [[ $chans == *" A "* ]]; then META[color]=RGBA; else META[color]=RGB; fi
+		if [[ $chans == *" A "* ]]; then META_color=RGBA; else META_color=RGB; fi
 	elif [[ $chans == *" Y "* && $chans == *" RY "* && $chans == *" BY "* ]]; then
-		META[color]=YCbCr
+		META_color=YCbCr
 	elif [[ $chans == *" Y "* ]]; then
-		if [[ $chans == *" A "* ]]; then META[color]=Gray+Alpha; else META[color]=Gray; fi
+		if [[ $chans == *" A "* ]]; then META_color=Gray+Alpha; else META_color=Gray; fi
 	fi
-	if [[ $chans == *" A "* ]]; then META[alpha]=1; else META[alpha]=0; fi
+	if [[ $chans == *" A "* ]]; then META_alpha=1; else META_alpha=0; fi
 	return 0
 }
 
@@ -667,45 +677,45 @@ meta_hdr() {
 	[[ $META_S =~ $re ]] || return 1
 	[[ ${BASH_REMATCH[1]:1} != "${BASH_REMATCH[3]:1}" ]] || return 1
 	if [[ ${BASH_REMATCH[1]} == ?Y ]]; then
-		META[height]=$((10#${BASH_REMATCH[2]}))
-		META[width]=$((10#${BASH_REMATCH[4]}))
+		META_height=$((10#${BASH_REMATCH[2]}))
+		META_width=$((10#${BASH_REMATCH[4]}))
 	else
-		META[width]=$((10#${BASH_REMATCH[2]}))
-		META[height]=$((10#${BASH_REMATCH[4]}))
+		META_width=$((10#${BASH_REMATCH[2]}))
+		META_height=$((10#${BASH_REMATCH[4]}))
 	fi
-	META[scan_order]="${BASH_REMATCH[1]} ${BASH_REMATCH[3]}"
-	META[data_offset]=$META_N
-	META[color]=RGB
-	META[alpha]=0
+	META_scan_order="${BASH_REMATCH[1]} ${BASH_REMATCH[3]}"
+	META_data_offset=$META_N
+	META_color=RGB
+	META_alpha=0
 	expo=${expo#"${expo%%[! ]*}"}
-	META[detail]=$fmt${expo:+, exposure $expo}
+	META_detail=$fmt${expo:+, exposure $expo}
 	return 0
 }
 
 # meta_probe FILE fills META.
 meta_probe() {
 	local f=${1-} sig rc=1
-	META=()
+	meta_clear
 	META_B=()
 	META_BOFF=0
 	[[ -f $f && -r $f ]] || return 1
 	meta_read "$f" 0 4096 || return 1
 	printf -v sig '%02x' "${META_B[@]:0:12}"
 	case $sig in
-	89504e470d0a1a0a*) META[format]=PNG && meta_png "$f" && rc=0 ;;
-	ffd8*) META[format]=JPEG && meta_jpeg "$f" && rc=0 ;;
-	474946383[79]61*) META[format]=GIF && meta_gif "$f" && rc=0 ;;
-	424d*) META[format]=BMP && meta_bmp "$f" && rc=0 ;;
-	52494646????????57454250) META[format]=WebP && meta_webp "$f" && rc=0 ;;
-	49492a00* | 4d4d002a*) META[format]=TIFF && meta_tiff "$f" && rc=0 ;;
-	762f3101*) META[format]=EXR && meta_exr "$f" && rc=0 ;;
+	89504e470d0a1a0a*) META_format=PNG && meta_png "$f" && rc=0 ;;
+	ffd8*) META_format=JPEG && meta_jpeg "$f" && rc=0 ;;
+	474946383[79]61*) META_format=GIF && meta_gif "$f" && rc=0 ;;
+	424d*) META_format=BMP && meta_bmp "$f" && rc=0 ;;
+	52494646????????57454250) META_format=WebP && meta_webp "$f" && rc=0 ;;
+	49492a00* | 4d4d002a*) META_format=TIFF && meta_tiff "$f" && rc=0 ;;
+	762f3101*) META_format=EXR && meta_exr "$f" && rc=0 ;;
 	# "#?RADIANCE" or "#?RGBE", then a newline.
-	233f52414449414e43450a* | 233f524742450a*) META[format]=HDR && meta_hdr "$f" && rc=0 ;;
+	233f52414449414e43450a* | 233f524742450a*) META_format=HDR && meta_hdr "$f" && rc=0 ;;
 	esac
 	META_B=()
-	if ((rc == 0 && ${META[width]:-0} > 0 && ${META[height]:-0} > 0)); then
+	if ((rc == 0 && ${META_width:-0} > 0 && ${META_height:-0} > 0)); then
 		return 0
 	fi
-	META=()
+	meta_clear
 	return 1
 }

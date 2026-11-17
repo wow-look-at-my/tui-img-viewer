@@ -33,13 +33,13 @@ gfx_init() {
 		GFX_PRE=$'\e_G' GFX_SUF=$'\e\\'
 		DSR=$'\e[5n'
 	fi
-	local hex code mark
-	printf -v PH '\U0010EEEE'
+	local hex
+	utf8_char 0x10EEEE
+	PH=$REPLY
 	DIA=()
 	for hex in $DIA_HEX; do
-		printf -v code '%08X' "0x$hex"
-		printf -v mark '%b' "\\U$code"
-		DIA+=("$mark")
+		utf8_char "0x$hex"
+		DIA+=("$REPLY")
 	done
 	# The image id travels in a color of the base palette, which every
 	# terminal setup keeps intact. The process id spreads the ids of two
@@ -181,7 +181,11 @@ link_update() {
 tx_begin() {
 	tx_abort
 	[[ -r $1 ]] || return 1
-	exec {TX_FD}< "$1"
+	# The file holds one line for each graphics command. TX_NEXT is one line
+	# ahead, so the last line is known as the last.
+	exec 8< "$1"
+	TX_NEXT=
+	IFS= read -r -u 8 TX_NEXT
 	# A later stage of the shown image keeps its id. The terminal then
 	# replaces the picture in place, and the cells stay as they are.
 	if (( SHOWN_ID && STAGE_DONE > 0 )); then
@@ -212,7 +216,7 @@ tx_begin() {
 # terminal drops the partial image.
 tx_abort() {
 	(( TX_ACTIVE )) || return 0
-	exec {TX_FD}<&-
+	exec 8<&-
 	local out=
 	(( TX_STARTED && ! TX_EOF )) && out+="${GFX_PRE}q=2,m=0;${GFX_SUF}"
 	(( TX_STARTED && TX_ID != SHOWN_ID )) && out+="${GFX_PRE}q=2,a=d,d=I,i=${TX_ID}${GFX_SUF}"
@@ -277,7 +281,9 @@ tx_pump() {
 	fi
 	# A window holds whole chunks and never more bytes than TX_WIN.
 	while (( burst > 0 && ! TX_EOF && (TX_WIN_SENT == 0 || TX_WIN_SENT + CHUNK <= TX_WIN) )); do
-		IFS= read -r -N "$CHUNK" -u "$TX_FD" chunk || TX_EOF=1
+		chunk=$TX_NEXT TX_NEXT=
+		IFS= read -r -u 8 TX_NEXT
+		[[ -n $TX_NEXT ]] || TX_EOF=1
 		more=$(( ! TX_EOF ))
 		if (( TX_STARTED )); then
 			ctrl="q=2,m=$more"
@@ -304,7 +310,7 @@ tx_pump() {
 
 # The whole image is in the terminal: show it.
 tx_done() {
-	exec {TX_FD}<&-
+	exec 8<&-
 	TX_ACTIVE=0
 	STAGE_DONE=$TX_STAGE
 	D_DETAILS=1

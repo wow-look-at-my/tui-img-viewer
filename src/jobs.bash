@@ -87,9 +87,12 @@ job_file() {
 		text=('(not readable)')
 	elif [[ ! -s $path ]]; then
 		text=('(empty file)')
-	elif grep -Iq '' -- "$path" 2>/dev/null; then
-		mapfile -t -n "$TEXT_LINES" raw < <(head -c 65536 -- "$path")
-		for line in "${raw[@]}"; do
+	elif ! head -c 65536 -- "$path" > "$JOB_OUT/head" 2>/dev/null; then
+		text=('(not readable)')
+	elif (( $(tr -d '\0' < "$JOB_OUT/head" | wc -c) == $(wc -c < "$JOB_OUT/head") )); then
+		# A text file holds no NUL byte.
+		read_lines raw "$JOB_OUT/head"
+		for line in "${raw[@]:0:TEXT_LINES}"; do
 			line=${line//$'\t'/    }
 			text+=("${line//[[:cntrl:]]/}")
 		done
@@ -110,10 +113,10 @@ job_other() {
 # size after rotation.
 job_meta_lines() {
 	local w=$1 h=$2 line
-	line=${META[format]-image}
-	[[ -n ${META[color]-} ]] && line+=" · ${META[color]}"
-	[[ -n ${META[bits]-} ]] && line+=" ${META[bits]}-bit"
-	[[ -n ${META[detail]-} ]] && line+=" · ${META[detail]}"
+	line=${META_format:-image}
+	[[ -n ${META_color-} ]] && line+=" · ${META_color}"
+	[[ -n ${META_bits-} ]] && line+=" ${META_bits}-bit"
+	[[ -n ${META_detail-} ]] && line+=" · ${META_detail}"
 	INFO+=("Type"$'\t'"$line")
 
 	local a=$w b=$h t
@@ -126,35 +129,38 @@ job_meta_lines() {
 	else
 		line+=" · $(( w / h )).$(( w * 100 / h % 100 / 10 ))$(( w * 100 / h % 10 )):1"
 	fi
-	(( ${META[orientation]:-1} > 1 )) && line+=" · EXIF rotation ${META[orientation]}"
+	(( ${META_orientation:-1} > 1 )) && line+=" · EXIF rotation ${META_orientation}"
 	INFO+=("Image"$'\t'"$line")
 
-	line=${META[make]-}
-	if [[ -n ${META[model]-} ]]; then
+	line=${META_make-}
+	if [[ -n ${META_model-} ]]; then
 		# Many cameras repeat the maker name in the model name.
-		[[ -n $line && ${META[model]} != "$line"* ]] && line+=" ${META[model]}" || line=${META[model]}
+		[[ -n $line && ${META_model} != "$line"* ]] && line+=" ${META_model}" || line=${META_model}
 	fi
 	[[ -n $line ]] && INFO+=("Camera"$'\t'"$line")
 
 	line=
-	[[ -n ${META[fnumber]-} ]] && line+="f/${META[fnumber]} · "
-	[[ -n ${META[exposure]-} ]] && line+="${META[exposure]} s · "
-	[[ -n ${META[iso]-} ]] && line+="ISO ${META[iso]} · "
-	[[ -n ${META[focal]-} ]] && line+="${META[focal]} mm · "
+	[[ -n ${META_fnumber-} ]] && line+="f/${META_fnumber} · "
+	[[ -n ${META_exposure-} ]] && line+="${META_exposure} s · "
+	[[ -n ${META_iso-} ]] && line+="ISO ${META_iso} · "
+	[[ -n ${META_focal-} ]] && line+="${META_focal} mm · "
 	[[ -n $line ]] && INFO+=("Shot"$'\t'"${line% · }")
-	[[ -n ${META[datetime]-} ]] && INFO+=("Taken"$'\t'"${META[datetime]}")
-	[[ -n ${META[lens]-} ]] && INFO+=("Lens"$'\t'"${META[lens]}")
+	[[ -n ${META_datetime-} ]] && INFO+=("Taken"$'\t'"${META_datetime}")
+	[[ -n ${META_lens-} ]] && INFO+=("Lens"$'\t'"${META_lens}")
 	return 0
 }
 
 # Publishes the PNG file $2 as stage $1 with the pixel size $3 x $4.
 job_stage() {
-	local n=$1 png=$2 bytes
-	# GNU base64 breaks its output into lines. The transfer needs one line.
-	( set -o pipefail; base64 < "$png" | tr -d '\n' ) > "$JOB_OUT/.s$n.b64" || return 1
-	bytes=$(wc -c < "$JOB_OUT/.s$n.b64") || return 1
-	# BSD wc puts spaces before the count.
-	job_write "s$n.dim" "$3 $4 $(( bytes ))"
+	local n=$1 png=$2 data i
+	data=$(set -o pipefail; base64 < "$png" | tr -d '\n') || return 1
+	local bytes=${#data}
+	(( bytes > 0 )) || return 1
+	# The file holds one line for each graphics command of the transfer.
+	for (( i = 0; i < bytes; i += CHUNK )); do
+		printf '%s\n' "${data:i:CHUNK}"
+	done > "$JOB_OUT/.s$n.b64" || return 1
+	job_write "s$n.dim" "$3 $4 $bytes"
 	mv -- "$JOB_OUT/.s$n.b64" "$JOB_OUT/s$n.b64"
 }
 
@@ -165,7 +171,7 @@ job_image() {
 	local -a INFO=()
 	local w=0 h=0 orient=1 format=
 	if meta_probe "$path"; then
-		w=${META[width]} h=${META[height]} orient=${META[orientation]:-1} format=${META[format]}
+		w=${META_width} h=${META_height} orient=${META_orientation:-1} format=${META_format}
 		if (( orient >= 5 )); then
 			local t=$w
 			w=$h h=$t
@@ -173,7 +179,7 @@ job_image() {
 		job_meta_lines "$w" "$h"
 	elif (( HAVE_FFPROBE )) && job_ffprobe "$path"; then
 		w=$PROBE_W h=$PROBE_H
-		declare -A META=([format]=$PROBE_CODEC)
+		META_format=$PROBE_CODEC
 		job_meta_lines "$w" "$h"
 	fi
 	job_stat_lines "$path"
@@ -230,14 +236,14 @@ job_image() {
 			if [[ $(ffmpeg -hide_banner -h decoder=exr 2>/dev/null) == *apply_trc* ]]; then
 				# This decoder applies the curve.
 				input=(-apply_trc iec61966_2_1 -i "$JOB_OUT/src")
-			elif [[ ${META[color]-} == @(RGBA|Gray+Alpha) ]]; then
+			elif [[ ${META_color-} == @(RGBA|Gray+Alpha) ]]; then
 				turn="format=gbrap16le,$srgb"
 			else
 				turn="format=gbrp16le,$srgb"
 			fi
 			;;
 		HDR)
-			if [[ ${META[scan_order]-} == '-Y +X' && $(ffmpeg -hide_banner -decoders 2>/dev/null) == *' hdr '* ]]; then
+			if [[ ${META_scan_order-} == '-Y +X' && $(ffmpeg -hide_banner -decoders 2>/dev/null) == *' hdr '* ]]; then
 				# This ffmpeg reads the format. Its output is linear light, so the sRGB curve follows here.
 				input=(-i "$JOB_OUT/src")
 				turn="format=gbrp16le,$srgb"
@@ -280,7 +286,7 @@ job_image() {
 # the filters that turn the planes into a normal picture.
 job_radiance() {
 	local path=$1 w=$2 h=$3 out_w=$4 out_h=$5 flips=''
-	case ${META[scan_order]-} in
+	case ${META_scan_order-} in
 		'-Y +X') ;;
 		'+Y +X') flips=vflip, ;;
 		'-Y -X') flips=hflip, ;;
@@ -290,7 +296,7 @@ job_radiance() {
 	# Scan lines that the preview cannot show are not decoded.
 	local step=$(( h / out_h ))
 	(( step < 1 )) && step=1
-	radiance_planes "$path" "${META[data_offset]}" "$w" "$h" "$step" "$JOB_OUT/planes" || return 1
+	radiance_planes "$path" "${META_data_offset}" "$w" "$h" "$step" "$JOB_OUT/planes" || return 1
 	# Mantissa and exponent cannot be averaged, so the first cut in width takes whole pixels.
 	local near_w=$(( out_w * 2 ))
 	(( near_w > w )) && near_w=$w

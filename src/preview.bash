@@ -49,10 +49,13 @@ job_start() {
 
 	local key="$kind|$path|${E_MTIME[CUR]}|${E_SIZE[CUR]}|${args[*]}|$SHOW_HIDDEN"
 	JOB_FINISHED=0 JOB_PID=0
-	if [[ -n ${CACHE[$key]-} && -e ${CACHE[$key]}/done ]]; then
-		JOB_DIR=${CACHE[$key]} JOB_KEY=
-		return 0
-	fi
+	local i
+	for (( i = 0; i < ${#CACHE_KEY[@]}; i++ )); do
+		if [[ ${CACHE_KEY[i]} == "$key" && -e ${CACHE_DIR[i]}/done ]]; then
+			JOB_DIR=${CACHE_DIR[i]} JOB_KEY=
+			return 0
+		fi
+	done
 	JOB_DIR=$RUN_DIR/job$(( ++JOB_SEQ )) JOB_KEY=$key
 	mkdir -p -- "$JOB_DIR" || { status 'cannot create a work directory'; JOB_DIR=; return 0; }
 	job_spawn "$kind" "$path" "$JOB_DIR" "${args[@]}"
@@ -64,14 +67,11 @@ job_start() {
 # Keeps a finished job for the session. The oldest job leaves the cache first.
 cache_add() {
 	[[ -n $JOB_KEY ]] || return 0
-	CACHE[$JOB_KEY]=$JOB_DIR
-	CACHE_ORDER+=("$JOB_KEY")
+	CACHE_KEY+=("$JOB_KEY") CACHE_DIR+=("$JOB_DIR")
 	JOB_KEY=
-	(( ${#CACHE_ORDER[@]} > CACHE_MAX )) || return 0
-	local old=${CACHE_ORDER[0]}
-	CACHE_ORDER=("${CACHE_ORDER[@]:1}")
-	rm -rf -- "${CACHE[$old]}"
-	unset 'CACHE[$old]'
+	(( ${#CACHE_KEY[@]} > CACHE_MAX )) || return 0
+	rm -rf -- "${CACHE_DIR[0]}"
+	CACHE_KEY=("${CACHE_KEY[@]:1}") CACHE_DIR=("${CACHE_DIR[@]:1}")
 }
 
 # Picks up the result files that the job has published since the last look.
@@ -79,11 +79,11 @@ job_poll() {
 	[[ -n $JOB_DIR ]] || return 0
 	local dir=$JOB_DIR
 	if (( ! GOT_INFO )) && [[ -e $dir/info ]]; then
-		mapfile -t JOB_INFO < "$dir/info"
+		read_lines JOB_INFO "$dir/info"
 		GOT_INFO=1 D_DETAILS=1
 	fi
 	if (( ! GOT_TEXT )) && [[ -e $dir/text ]]; then
-		mapfile -t PV_TEXT < "$dir/text"
+		read_lines PV_TEXT "$dir/text"
 		GOT_TEXT=1 PV_KIND=text D_PREVIEW=1
 	fi
 	if (( ! GOT_ERR )) && [[ -e $dir/err ]]; then
@@ -170,16 +170,18 @@ preview_tick() {
 	job_poll
 }
 
-# Returns the read timeout for the main loop: zero while data can go out,
-# short while something is pending, long when idle.
+# Sets REPLY to the wait of the main loop for input: "none" while data can go
+# out, "busy". This happens while something is pending, "idle" for the rest.
 preview_timeout() {
 	if (( TX_ACTIVE && ! TX_WAIT && ! TX_PAUSED )); then
-		REPLY=0
+		REPLY=none
 	elif (( PENDING || HS_PENDING || TX_PAUSED )) || { [[ -n $JOB_DIR ]] && (( ! JOB_FINISHED )); }; then
-		REPLY=$TICK_BUSY_S
+		REPLY=busy
 	elif (( TX_WAIT )) && [[ $ACK_MODE != on ]]; then
-		REPLY=$TICK_BUSY_S
+		REPLY=busy
+	elif (( TX_CHECK_UNTIL || TX_RETRY_AT > NOW )); then
+		REPLY=busy
 	else
-		REPLY=$TICK_IDLE_S
+		REPLY=idle
 	fi
 }
