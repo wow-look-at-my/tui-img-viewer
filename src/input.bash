@@ -28,13 +28,15 @@ input_wait() {
 		if (( READ_FRAC )); then
 			local t=$TICK_IDLE_S
 			[[ $wait == busy ]] && t=$TICK_BUSY_S
-			# bash makes this read wait for one byte.
+			# bash makes this read wait for one byte. A byte that arrives at
+			# the end of the time is in c, and the status says: timeout.
+			c=
 			IFS= read -r -n 1 -d '' -t "$t" c
 			rc=$?
-			if (( rc == 0 )); then
+			if [[ -n $c ]]; then
 				INBUF+=$c
 				input_poll
-			elif (( rc <= 128 )); then
+			elif (( rc > 0 && rc <= 128 )); then
 				# End of input: the terminal is gone.
 				RUNNING=0
 			fi
@@ -44,12 +46,17 @@ input_wait() {
 		else
 			now_ms
 			local t0=$NOW
-			if IFS= read -r -n 1 -d '' -t 1 c; then
+			c=
+			IFS= read -r -n 1 -d '' -t 1 c
+			rc=$?
+			if [[ -n $c ]]; then
 				INBUF+=$c
 				input_poll
+			elif (( rc == 0 || rc > 128 )); then
+				EARLY_FAILS=0
 			else
-				# This bash gives one status for a timeout and for the end of
-				# input. A read that fails early saw the end of input.
+				# The oldest bash gives one status for a timeout and for the
+				# end of input. A read that fails early saw the end of input.
 				now_ms
 				if (( NOW - t0 < 500 )); then
 					(( ++EARLY_FAILS >= 3 )) && RUNNING=0

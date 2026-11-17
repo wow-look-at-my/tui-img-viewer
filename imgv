@@ -1659,10 +1659,15 @@ radiance_filter() {
 # Background preview jobs. One job reads one file and writes its results into
 # its own directory.
 
-# Starts a job in the background. Sets JOB_PID.
+# Starts a job in the background. Sets JOB_PID. A subshell starts the job and
+# ends at once, so the job is not a child of this shell.
 job_spawn() {
-	job_main "$@" </dev/null >/dev/null 2>&1 &
-	JOB_PID=$!
+	local dir=$3
+	(
+		job_main "$@" </dev/null >/dev/null 2>&1 &
+		echo "$!" > "$dir/pid"
+	)
+	read -r JOB_PID < "$dir/pid" || JOB_PID=0
 }
 
 job_main() {
@@ -2791,13 +2796,15 @@ input_wait() {
 		if (( READ_FRAC )); then
 			local t=$TICK_IDLE_S
 			[[ $wait == busy ]] && t=$TICK_BUSY_S
-			# bash makes this read wait for one byte.
+			# bash makes this read wait for one byte. A byte that arrives at
+			# the end of the time is in c, and the status says: timeout.
+			c=
 			IFS= read -r -n 1 -d '' -t "$t" c
 			rc=$?
-			if (( rc == 0 )); then
+			if [[ -n $c ]]; then
 				INBUF+=$c
 				input_poll
-			elif (( rc <= 128 )); then
+			elif (( rc > 0 && rc <= 128 )); then
 				# End of input: the terminal is gone.
 				RUNNING=0
 			fi
@@ -2807,12 +2814,17 @@ input_wait() {
 		else
 			now_ms
 			local t0=$NOW
-			if IFS= read -r -n 1 -d '' -t 1 c; then
+			c=
+			IFS= read -r -n 1 -d '' -t 1 c
+			rc=$?
+			if [[ -n $c ]]; then
 				INBUF+=$c
 				input_poll
+			elif (( rc == 0 || rc > 128 )); then
+				EARLY_FAILS=0
 			else
-				# This bash gives one status for a timeout and for the end of
-				# input. A read that fails early saw the end of input.
+				# The oldest bash gives one status for a timeout and for the
+				# end of input. A read that fails early saw the end of input.
 				now_ms
 				if (( NOW - t0 < 500 )); then
 					(( ++EARLY_FAILS >= 3 )) && RUNNING=0
@@ -3179,8 +3191,8 @@ on_resize() {
 # busybox tools and an old bash has less than a GNU system.
 probe_host() {
 	local major=${BASH_VERSINFO[0]} minor=${BASH_VERSINFO[1]} out
-	# A read timeout below one second, and a time format in printf.
-	(( major >= 4 )) && READ_FRAC=1
+	# An older bash can drop the byte that arrives at the end of a read timeout.
+	(( major >= 5 )) && READ_FRAC=1
 	(( major > 4 || (major == 4 && minor >= 2) )) && TIME_BUILTIN=1
 	if (( ! READ_FRAC )); then
 		if sleep "$TICK_BUSY_S" 2>/dev/null; then

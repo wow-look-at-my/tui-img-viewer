@@ -94,8 +94,8 @@ on_resize() {
 # busybox tools and an old bash has less than a GNU system.
 probe_host() {
 	local major=${BASH_VERSINFO[0]} minor=${BASH_VERSINFO[1]} out
-	# A read timeout below one second, and a time format in printf.
-	(( major >= 4 )) && READ_FRAC=1
+	# An older bash can drop the byte that arrives at the end of a read timeout.
+	(( major >= 5 )) && READ_FRAC=1
 	(( major > 4 || (major == 4 && minor >= 2) )) && TIME_BUILTIN=1
 	if (( ! READ_FRAC )); then
 		if sleep "$TICK_BUSY_S" 2>/dev/null; then
