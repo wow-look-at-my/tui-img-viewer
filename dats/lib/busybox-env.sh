@@ -40,5 +40,6 @@ if [[ ! -x $dir/bash ]]; then
 	cp "$src/bash-$version/bash" "$dir/bash"
 	rm -rf -- "$src"
 fi
-"$dir/bash" --version | head -n 1
-busybox | head -n 1
+# sed reads to the end, so the writer gets no broken pipe.
+"$dir/bash" --version | sed -n 1p
+busybox | sed -n 1p
