@@ -90,8 +90,56 @@ on_resize() {
 	preview_restart
 }
 
+# Finds what this bash and the tools of this host can do. A host with
+# busybox tools and an old bash has less than a GNU system.
+probe_host() {
+	local major=${BASH_VERSINFO[0]} minor=${BASH_VERSINFO[1]} out
+	# An older bash can drop the byte that arrives at the end of a read timeout.
+	(( major >= 5 )) && READ_FRAC=1
+	(( major > 4 || (major == 4 && minor >= 2) )) && TIME_BUILTIN=1
+	if (( ! READ_FRAC )); then
+		if sleep "$TICK_BUSY_S" 2>/dev/null; then
+			NAP=(sleep "$TICK_BUSY_S") NAP_IDLE=(sleep "$TICK_IDLE_S")
+		elif command -v usleep >/dev/null; then
+			NAP=(usleep 20000) NAP_IDLE=(usleep 250000)
+		else
+			NAP=(sleep 1) NAP_IDLE=(sleep 1)
+			status 'this host has no short sleep: the screen follows slowly'
+		fi
+	fi
+	# GNU and busybox date take the time after "-d @", BSD date after "-r".
+	date -d @0 +%s >/dev/null 2>&1 || DATE_OPT=-r DATE_PRE=''
+
+	command -v ffmpeg >/dev/null && HAVE_FFMPEG=1
+	command -v ffprobe >/dev/null && HAVE_FFPROBE=1
+	command -v file >/dev/null && HAVE_FILE=1
+	# GNU and busybox stat take the format after -c, BSD stat after -f.
+	if stat -c %s . >/dev/null 2>&1; then
+		STAT_LIST=(-c '%s/%Y') STAT_MODE=(-c '%A  %U:%G')
+		# Not every stat knows the time with a fraction.
+		out=$(stat -c '%s/%.9Y' . 2>/dev/null) || out=
+		[[ $out == +([0-9])/+([0-9])?(.+([0-9])) ]] && STAT_LIST=(-c '%s/%.9Y')
+	else
+		STAT_LIST=(-f '%z/%Fm') STAT_MODE=(-f '%Sp  %Su:%Sg')
+	fi
+	# Not every sort knows the order of version numbers.
+	SORT_NAME=(-t/ -k5 -f)
+	sort -V < /dev/null > /dev/null 2>&1 && SORT_NAME+=(-V)
+
+	# The image details and the previews read bytes with od and write them with base64.
+	out=$(printf 'A' | od -An -v -tu1 -j 0 -N 1 2>/dev/null) || out=
+	if [[ $out != *65* ]]; then
+		status 'the od of this host cannot read bytes: images show no details and no preview'
+	elif [[ $(printf 'A' | base64 2>/dev/null) != QQ== ]]; then
+		status 'base64 is not installed: images have no preview'
+	fi
+}
+
 main() {
-	(( BASH_VERSINFO[0] >= 5 )) || die 'bash 5 or later is needed'
+	(( BASH_VERSINFO[0] > 3 || (BASH_VERSINFO[0] == 3 && BASH_VERSINFO[1] >= 2) )) || die 'bash 3.2 or later is needed'
+	[[ -n ${EPOCHREALTIME-} || -r /proc/uptime ]] || die 'this bash has no clock: use bash 5, or a host with /proc/uptime'
+	# The program handles text as bytes and reads UTF-8 with its own code.
+	export LC_ALL=C
 	state_init
 	parse_args "$@"
 
@@ -106,21 +154,7 @@ main() {
 	fi
 	[[ -t 0 && -t 1 ]] || die 'needs a terminal on standard input and output'
 
-	# Text width and the placeholder characters need a UTF-8 locale.
-	case ${LC_ALL:-${LC_CTYPE:-${LANG-}}} in
-		*[Uu][Tt][Ff]-8 | *[Uu][Tt][Ff]8) ;;
-		*) export LC_ALL=C.UTF-8 ;;
-	esac
-
-	command -v ffmpeg >/dev/null && HAVE_FFMPEG=1
-	command -v ffprobe >/dev/null && HAVE_FFPROBE=1
-	command -v file >/dev/null && HAVE_FILE=1
-	# GNU stat takes its format after -c, BSD stat after -f.
-	if stat -c %s . >/dev/null 2>&1; then
-		STAT_LIST=(-c '%s/%.9Y') STAT_MODE=(-c '%A  %U:%G')
-	else
-		STAT_LIST=(-f '%z/%Fm') STAT_MODE=(-f '%Sp  %Su:%Sg')
-	fi
+	probe_host
 	[[ -n ${TMUX-} && -n ${TMUX_PANE-} ]] && IN_TMUX=1
 
 	RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/$PROG.XXXXXX") || die 'cannot create a work directory'
@@ -149,19 +183,14 @@ main() {
 	preview_reset
 	render
 
-	local drained
 	while (( RUNNING )); do
 		preview_timeout
-		if [[ $REPLY == 0 ]]; then
-			read -t 0 && read_key "$ESC_WAIT_S" && [[ -n $KEY ]] && handle_key "$KEY"
-		else
-			read_key "$REPLY" && [[ -n $KEY ]] && handle_key "$KEY"
-		fi
-		# Handle all keys that wait before one redraw.
-		drained=0
-		while (( RUNNING && drained++ < 64 )) && read -t 0; do
-			read_key "$ESC_WAIT_S" && [[ -n $KEY ]] && handle_key "$KEY"
-		done
+		# A sequence that is not whole yet needs a look soon.
+		[[ -n $INBUF && $REPLY == idle ]] && REPLY=busy
+		input_wait "$REPLY"
+		now_ms
+		# All keys that wait are handled before one redraw.
+		input_dispatch
 		now_ms
 		(( RESIZED )) && on_resize
 		if [[ -n $STATUS ]] && (( NOW - STATUS_AT > STATUS_MS )); then

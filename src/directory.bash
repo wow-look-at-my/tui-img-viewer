@@ -8,12 +8,14 @@ dir_scan() {
 	shopt -s nullglob
 	(( SHOW_HIDDEN )) && shopt -s dotglob
 	local -a entries=() meta=()
-	local name target type try i=0
+	local name target type try i=0 out
 	# An entry can go away between both reads. The scan then starts again.
 	for (( try = 0; try < 3; try++ )); do
 		entries=(*)
 		(( ${#entries[@]} )) || return 0
-		mapfile -t meta < <(printf './%s\0' "${entries[@]}" | xargs -0 stat "${STAT_LIST[@]}")
+		out=$(printf './%s\0' "${entries[@]}" | xargs -0 stat "${STAT_LIST[@]}")
+		meta=()
+		IFS=$'\n' read -r -d '' -a meta <<< "$out"
 		(( ${#meta[@]} == ${#entries[@]} )) && break
 	done
 	(( ${#meta[@]} == ${#entries[@]} )) || return 1
@@ -35,11 +37,16 @@ dir_load() {
 	case $SORT in
 		time) sort_args=(-t/ '-k4,4nr') ;;
 		size) sort_args=(-t/ '-k3,3nr') ;;
-		*) sort_args=(-t/ -k5 -f -V) ;;
+		*) sort_args=("${SORT_NAME[@]}") ;;
 	esac
 
 	local -a dn=() dl=() ds=() dm=() fn=() fk=() fl=() fs=() fm=() fimg=()
-	local target type size mtime name reason=
+	local target type size mtime name reason='' failed=0
+	# The messages of the tools would damage the screen, so they go to a file.
+	(
+		set -o pipefail
+		dir_scan | sort -z "${sort_args[@]}"
+	) > "$RUN_DIR/list" 2> "$RUN_DIR/list.err" || failed=1
 	# A name cannot hold a slash, so the slash is a safe field separator.
 	while IFS=/ read -r -d '' target type size mtime name; do
 		if [[ $target == d ]]; then
@@ -59,12 +66,9 @@ dir_load() {
 		else
 			fimg+=(0)
 		fi
-	done < <(
-		set -o pipefail
-		{ dir_scan | sort -z "${sort_args[@]}"; } 2> "$RUN_DIR/list.err"
-	)
-	# The messages of the tools would damage the screen, so the footer shows the first one.
-	if ! wait "$!"; then
+	done < "$RUN_DIR/list"
+	# The footer shows the first message of the tools.
+	if (( failed )); then
 		IFS= read -r reason < "$RUN_DIR/list.err"
 		status "cannot list this directory: ${reason:-no message}"
 	fi
@@ -97,16 +101,28 @@ dir_find() {
 	done
 }
 
+# Sets REPLY to the index of the directory $1 in SEL_DIR. An unknown
+# directory gives the index of the next free place.
+sel_index() {
+	for (( REPLY = 0; REPLY < ${#SEL_DIR[@]}; REPLY++ )); do
+		[[ ${SEL_DIR[REPLY]} == "$1" ]] && return 0
+	done
+	return 0
+}
+
 # Enters the directory $1 and selects the entry named $2 when it exists.
 dir_change() {
-	local from=$PWD
-	(( N > 0 )) && DIR_SEL[$from]=${E_NAME[CUR]}
+	if (( N > 0 )); then
+		sel_index "$PWD"
+		SEL_DIR[REPLY]=$PWD SEL_NAME[REPLY]=${E_NAME[CUR]}
+	fi
 	if ! cd -- "$1" 2>/dev/null; then
 		status "cannot open $1"
 		return 1
 	fi
 	dir_load
-	dir_find "${2:-${DIR_SEL[$PWD]-}}"
+	sel_index "$PWD"
+	dir_find "${2:-${SEL_NAME[REPLY]-}}"
 	CUR=$REPLY TOP=0
 	scroll_fix
 	D_ALL=1
@@ -175,15 +191,19 @@ zoom_toggle() {
 
 # Selects the next entry whose name holds the search text. $1 is the direction.
 search_jump() {
-	local step=$1 start=$2 i k name needle=${SEARCH,,}
-	[[ -n $needle ]] || return 1
+	local step=$1 start=$2 i k found=-1
+	[[ -n $SEARCH ]] || return 1
+	# The match ignores the case of the letters a to z.
+	shopt -s nocasematch
 	for (( k = 0; k < N; k++ )); do
 		i=$(( (start + k * step % N + N) % N ))
-		name=${E_NAME[i],,}
-		if [[ $name == *"$needle"* ]]; then
-			select_index "$i"
-			return 0
+		if [[ ${E_NAME[i]} == *"$SEARCH"* ]]; then
+			found=$i
+			break
 		fi
 	done
-	return 1
+	shopt -u nocasematch
+	(( found >= 0 )) || return 1
+	select_index "$found"
+	return 0
 }

@@ -85,21 +85,25 @@ sequence() {
 # Reads the stream as one line per escape sequence and answers the queries. A
 # query can be the last thing in the stream. That query is with no line end
 # after it, so a short read timeout hands over a line that is still open.
+#
+# A timed read of bash can take a whole line with its end and still report a
+# timeout. The read here takes plain bytes, and this function cuts the lines.
 respond() {
-	local line pending='' rc
+	local chunk pending='' rc
 	while :; do
-		IFS= read -r -t 0.02 line
+		IFS= read -r -N 4096 -t 0.02 chunk
 		rc=$?
-		pending+=$line
-		if (( rc == 0 )); then
-			sequence "$pending"
-			pending=
-		elif (( rc > 128 )); then
+		pending+=$chunk
+		while [[ $pending == *$'\n'* ]]; do
+			sequence "${pending%%$'\n'*}"
+			pending=${pending#*$'\n'}
+		done
+		if (( rc > 128 )); then
 			if [[ $pending == '[5n'* || $pending == '[16t'* || $pending == '[c'* || $pending == '[>c'* ]]; then
 				sequence "$pending"
 				pending=
 			fi
-		else
+		elif (( rc != 0 )); then
 			sequence "$pending"
 			return
 		fi

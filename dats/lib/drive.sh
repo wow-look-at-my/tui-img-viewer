@@ -13,7 +13,7 @@ export TMUX_TMPDIR=$work
 unset TMUX TMUX_PANE
 socket=imgv-test
 
-printf -v command 'LC_ALL=C.UTF-8 TERM=xterm-256color %q %s %q' "$root/imgv" "${IMGV_ARGS-}" "$target"
+printf -v command 'LC_ALL=C.UTF-8 TERM=xterm-256color %q %q %s %q' "$here/run.sh" "$root/imgv" "${IMGV_ARGS-}" "$target"
 if [[ $mode == tmux ]]; then
 	# The locale of the tmux client decides whether tmux writes UTF-8 to the terminal.
 	printf -v command 'LC_ALL=%q TERM=xterm-256color tmux -L %s -f /dev/null new-session %q' \
@@ -101,11 +101,12 @@ while read -r ms kind detail size; do
 				open=1
 			fi
 			# An empty last chunk closes a transfer that the program stopped.
+			# shellcheck disable=SC2154 # meta_probe sets the size
 			if (( open )) && [[ $detail == *m=0* ]]; then
 				open=0
 				png=$work/img.$images.png
 				if [[ ${size:-0} != 0 || -s $png ]] && ffmpeg -nostdin -v error -i "$png" -f null - 2>/dev/null && meta_probe "$png"; then
-					last="${META[width]}x${META[height]} complete"
+					last="${META_width}x${META_height} complete"
 				elif (( last_key && ms - last_key < 1500 )); then
 					last='stopped soon after a key'
 				else
@@ -127,4 +128,8 @@ if LC_ALL=C grep -q $'\xf4\x8e\xbb\xae' "$work/stream"; then
 else
 	echo 'image cells on the terminal: no'
 fi
-rm -rf -- "$work"
+if [[ -n ${KEEP_WORK-} ]]; then
+	echo "work directory: $work"
+else
+	rm -rf -- "$work"
+fi

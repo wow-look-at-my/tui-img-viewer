@@ -12,9 +12,13 @@ shared:
 				fi
 			done < <(find dats/fixtures/browse -type f -print0)
 			exit "$rc"
-		stat: |
+		xargs: |
 			#!/bin/sh
-			echo 'stat: broken on purpose' >&2
+			echo 'xargs: broken on purpose' >&2
+			exit 1
+		od: |
+			#!/bin/sh
+			echo 'od: this one knows no options' >&2
 			exit 1
 
 # An image with much detail: its preview is too large for the buffers
@@ -46,12 +50,38 @@ tests:
 
 	- desc: a listing that fails shows the reason in the footer
 	  timeout: 60s
-	  cmd: mkdir -p {outputs.bin} && cp {shared.stat} {outputs.bin}/stat && chmod +x {outputs.bin}/stat && PATH={outputs.bin}:$PATH bash dats/lib/drive.sh dats/fixtures/browse w:1.5 shot:broken
+	  cmd: mkdir -p {outputs.bin} && cp {shared.xargs} {outputs.bin}/xargs && chmod +x {outputs.bin}/xargs && IMGV_PATH={outputs.bin}:${IMGV_PATH:-$PATH} bash dats/lib/drive.sh dats/fixtures/browse w:1.5 shot:broken
 	  outputs:
 		stdout:
 			- " (empty)"
-			- "cannot list this directory: stat: broken on purpose"
+			- "cannot list this directory: xargs: broken on purpose"
 			- "0/0  name  normal"
+
+	- desc: a host whose od cannot read bytes says so in the footer
+	  timeout: 60s
+	  cmd: mkdir -p {outputs.bin} && cp {shared.od} {outputs.bin}/od && chmod +x {outputs.bin}/od && IMGV_PATH={outputs.bin}:${IMGV_PATH:-$PATH} bash dats/lib/drive.sh dats/fixtures/browse w:1.5 shot:od
+	  outputs:
+		stdout:
+			- "the od of this host cannot read bytes: images show no details and no preview"
+
+	- desc: a name with accents and wide characters keeps the columns in line, and the file time shows
+	  timeout: 60s
+	  cmd: mkdir -p {outputs.d} && printf 'hello' > {outputs.d}/Ünï-写真.txt && touch -d @1700000000 {outputs.d}/Ünï-写真.txt && TZ=UTC bash dats/lib/drive.sh {outputs.d} w:1.5 shot:names k:/ k:写 w:1 shot:search $'k:\r'
+	  outputs:
+		stdout:
+			- " Ünï-写真.txt                   5 B"
+			- "Name     Ünï-写真.txt"
+			- "File     5 B · 2023-11-14 22:13"
+			- "/写"
+
+	- desc: the arrow keys and the Home and End keys move the selection, and a lone escape key ends a search
+	  timeout: 60s
+	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:1 $'k:\e[B' w:0.3 $'k:\e[B' w:1.5 shot:arrows $'k:\e[F' w:1.5 shot:end $'k:\eOH' w:0.5 k:/ k:tall w:0.5 $'k:\e' w:1.5 shot:escape
+	  outputs:
+		stdout:
+			- "Name     broken.jpg"
+			- "Name     tall.webp"
+			- "Name     sub"
 
 	- desc: a large image arrives through tmux as a draft and then in full
 	  timeout: 60s
@@ -178,9 +208,12 @@ tests:
 			- "images: 0"
 			- "graphics query: yes"
 
+	# tmux also gets no answer from this terminal. It then draws the whole screen
+	# again one time, and it drops image data that waits behind that drawing.
+	# The byte counts of tmux do not show such a loss, so the key comes later.
 	- desc: a terminal that answers nothing still gets the image, at a fixed rate
 	  timeout: 90s
-	  cmd: FAKE_MUTE=1 bash dats/lib/drive.sh dats/fixtures/browse w:3.8 shot:mute k:j w:6
+	  cmd: FAKE_MUTE=1 bash dats/lib/drive.sh dats/fixtures/browse w:5.5 shot:mute k:j w:6
 	  outputs:
 		stdout:
 			- "the terminal does not answer: no flow control"
