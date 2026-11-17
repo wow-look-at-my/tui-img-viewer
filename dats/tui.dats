@@ -66,7 +66,7 @@ tests:
 
 	- desc: a name with accents and wide characters keeps the columns in line, and the file time shows
 	  timeout: 60s
-	  cmd: mkdir -p {outputs.d} && printf 'hello' > {outputs.d}/Ünï-写真.txt && touch -d @1700000000 {outputs.d}/Ünï-写真.txt && TZ=UTC bash dats/lib/drive.sh {outputs.d} w:1.5 shot:names k:/ k:写 w:1 shot:search
+	  cmd: mkdir -p {outputs.d} && printf 'hello' > {outputs.d}/Ünï-写真.txt && touch -d @1700000000 {outputs.d}/Ünï-写真.txt && TZ=UTC bash dats/lib/drive.sh {outputs.d} w:1.5 shot:names k:/ k:写 w:1 shot:search $'k:\r'
 	  outputs:
 		stdout:
 			- " Ünï-写真.txt                   5 B"
