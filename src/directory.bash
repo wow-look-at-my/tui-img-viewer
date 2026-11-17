@@ -41,7 +41,7 @@ dir_load() {
 	esac
 
 	local -a dn=() dl=() ds=() dm=() fn=() fk=() fl=() fs=() fm=() fimg=()
-	local target type size mtime name reason= failed=0
+	local target type size mtime name reason='' failed=0
 	# The messages of the tools would damage the screen, so they go to a file.
 	(
 		set -o pipefail

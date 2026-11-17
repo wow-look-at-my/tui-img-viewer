@@ -70,7 +70,7 @@ time_text() {
 	if (( TIME_BUILTIN )); then
 		printf -v REPLY '%(%Y-%m-%d %H:%M)T' "$1"
 	else
-		REPLY=$(date "${DATE_AT[@]}$1" '+%Y-%m-%d %H:%M' 2>/dev/null) || REPLY='?'
+		REPLY=$(date "$DATE_OPT" "$DATE_PRE$1" '+%Y-%m-%d %H:%M' 2>/dev/null) || REPLY='?'
 	fi
 }
 

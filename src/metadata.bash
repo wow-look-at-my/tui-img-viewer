@@ -714,6 +714,7 @@ meta_probe() {
 	esac
 	META_B=()
 	if ((rc == 0 && ${META_width:-0} > 0 && ${META_height:-0} > 0)); then
+		META_alpha=${META_alpha:-0}
 		return 0
 	fi
 	meta_clear

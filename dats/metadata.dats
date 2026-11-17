@@ -1,22 +1,45 @@
 # Tests for src/metadata.bash. Run dats/fixtures/make-meta-fixtures.sh to
-# rebuild the fixtures. Every positive test runs under nounset.
+# rebuild the fixtures. dats/lib/run.sh runs each probe with the shell and
+# the tools under test. A bash that accepts an empty array under nounset
+# runs every probe under nounset.
 shared:
 	files:
-		probe.sh: |
-			set -o nounset
+		lib.sh: |
+			if (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) )); then
+				set -o nounset
+			fi
 			source src/metadata.bash
+			# Prints each result that is known, in the order of the key names.
+			meta_dump() {
+				local k v
+				for k in $META_KEYS; do
+					v=META_$k
+					[[ -n ${!v} ]] && printf '%s=%s\n' "$k" "${!v}"
+				done
+				return 0
+			}
+		probe.sh: |
+			source {shared.lib.sh}
 			if ! meta_probe "$1"; then
 				echo "meta_probe failed on $1"
 				exit 1
 			fi
-			for k in $(printf '%s\n' "${!META[@]}" | sort); do
-				printf '%s=%s\n' "$k" "${META[$k]}"
-			done
+			meta_dump
 		neg.sh: |
-			set -o nounset
-			source src/metadata.bash
+			source {shared.lib.sh}
 			meta_probe "$1"
-			echo "rc=$? keys=${#META[@]}"
+			echo "rc=$? keys=$(( $(meta_dump | wc -l) ))"
+		twice.sh: |
+			source {shared.lib.sh}
+			meta_probe dats/fixtures/meta/jpeg-exif-le.jpg
+			meta_probe dats/fixtures/meta/png-rgb.png
+			echo "${META_make:-unset} $(( $(meta_dump | wc -l) ))"
+		options.sh: |
+			o1=$(set -o)
+			source src/metadata.bash
+			meta_probe dats/fixtures/meta/jpeg-exif-le.jpg
+			o2=$(set -o)
+			[[ $o1 == "$o2" ]] && echo same
 		cover.sh: |
 			mapfile -t lines < dats/metadata.dats
 			rc=0
@@ -32,11 +55,10 @@ shared:
 			done
 			exit "$rc"
 		timing.sh: |
-			source src/metadata.bash
 			start=${EPOCHREALTIME/./}
-			meta_probe "$1" || exit 1
+			out=$(dats/lib/run.sh {shared.probe.sh} "$1") || exit 1
 			ms=$(((${EPOCHREALTIME/./} - start) / 1000))
-			if ((ms < 2000)); then echo "fast width=${META[width]}"; else echo "slow: $ms ms"; fi
+			if ((ms < 2000)); then echo "fast $(printf '%s\n' "$out" | grep '^width=')"; else echo "slow: $ms ms"; fi
 
 tests:
 	- desc: every fixture file has a test
@@ -52,29 +74,29 @@ tests:
 			0: '^fast width=40$'
 	- desc: a FIFO is rejected without a read
 	  timeout: 5s
-	  cmd: mkfifo {outputs.fifo} && bash {shared.neg.sh} {outputs.fifo}
+	  cmd: mkfifo {outputs.fifo} && dats/lib/run.sh {shared.neg.sh}{outputs.fifo}
 	  outputs:
 		stdout:
 			0: '^rc=1 keys=0$'
 	- desc: a missing file is rejected
-	  cmd: bash {shared.neg.sh} {outputs.missing.png}
+	  cmd: dats/lib/run.sh {shared.neg.sh}{outputs.missing.png}
 	  outputs:
 		stdout:
 			0: '^rc=1 keys=0$'
 		!stderr:
 			0: ''
 	- desc: META loses the keys of the previous probe
-	  cmd: source src/metadata.bash; meta_probe dats/fixtures/meta/jpeg-exif-le.jpg; meta_probe dats/fixtures/meta/png-rgb.png; echo "${META[make]-unset} ${#META[@]}"
+	  cmd: dats/lib/run.sh {shared.twice.sh}
 	  outputs:
 		stdout:
 			0: '^unset 6$'
 	- desc: sourcing the file runs nothing and keeps the shell options
-	  cmd: o1=$(set -o); source src/metadata.bash; meta_probe dats/fixtures/meta/jpeg-exif-le.jpg; o2=$(set -o); [[ $o1 == "$o2" ]] && echo same
+	  cmd: dats/lib/run.sh {shared.options.sh}
 	  outputs:
 		stdout:
 			0: '^same$'
 	- desc: gif87a.gif
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/gif87a.gif
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/gif87a.gif
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -89,7 +111,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: gif89a.gif
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/gif89a.gif
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/gif89a.gif
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -104,7 +126,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: jpeg-baseline.jpg
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/jpeg-baseline.jpg
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/jpeg-baseline.jpg
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -119,7 +141,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: jpeg-big-app2.jpg
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/jpeg-big-app2.jpg
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/jpeg-big-app2.jpg
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -134,7 +156,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: jpeg-exif-be.jpg
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/jpeg-exif-be.jpg
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/jpeg-exif-be.jpg
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -156,7 +178,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: jpeg-exif-le.jpg
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/jpeg-exif-le.jpg
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/jpeg-exif-le.jpg
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -180,7 +202,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: jpeg-gray.jpg
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/jpeg-gray.jpg
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/jpeg-gray.jpg
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -195,7 +217,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: jpeg-progressive.jpg
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/jpeg-progressive.jpg
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/jpeg-progressive.jpg
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -210,7 +232,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: png-animated.png
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/png-animated.png
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/png-animated.png
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -225,7 +247,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: png-exif.png
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/png-exif.png
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/png-exif.png
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -242,7 +264,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: png-gray16.png
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/png-gray16.png
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/png-gray16.png
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -256,7 +278,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: png-interlaced.png
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/png-interlaced.png
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/png-interlaced.png
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -271,7 +293,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: png-palette.png
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/png-palette.png
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/png-palette.png
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -285,7 +307,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: png-rgb.png
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/png-rgb.png
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/png-rgb.png
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -299,7 +321,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: png-rgba.png
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/png-rgba.png
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/png-rgba.png
 	  outputs:
 		stdout:
 			0: '^alpha=1$'
@@ -313,7 +335,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: png-trns.png
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/png-trns.png
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/png-trns.png
 	  outputs:
 		stdout:
 			0: '^alpha=1$'
@@ -327,7 +349,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: tiff-be-rgba.tif
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/tiff-be-rgba.tif
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/tiff-be-rgba.tif
 	  outputs:
 		stdout:
 			0: '^alpha=1$'
@@ -343,7 +365,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: tiff-exif-be.tif
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/tiff-exif-be.tif
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/tiff-exif-be.tif
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -362,7 +384,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: tiff-gray-zip.tif
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/tiff-gray-zip.tif
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/tiff-gray-zip.tif
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -378,7 +400,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: tiff-le.tif
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/tiff-le.tif
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/tiff-le.tif
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -394,7 +416,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: webp-animated.webp
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/webp-animated.webp
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/webp-animated.webp
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -409,7 +431,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: webp-lossless-alpha.webp
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/webp-lossless-alpha.webp
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/webp-lossless-alpha.webp
 	  outputs:
 		stdout:
 			0: '^alpha=1$'
@@ -424,7 +446,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: webp-lossy.webp
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/webp-lossy.webp
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/webp-lossy.webp
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -439,7 +461,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: webp-vp8x-alpha.webp
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/webp-vp8x-alpha.webp
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/webp-vp8x-alpha.webp
 	  outputs:
 		stdout:
 			0: '^alpha=1$'
@@ -454,7 +476,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: webp-vp8x-exif.webp
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/webp-vp8x-exif.webp
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/webp-vp8x-exif.webp
 	  outputs:
 		stdout:
 			0: '^alpha=1$'
@@ -472,7 +494,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: bmp-24.bmp
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/bmp-24.bmp
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/bmp-24.bmp
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -486,7 +508,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: bmp-32-topdown.bmp
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/bmp-32-topdown.bmp
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/bmp-32-topdown.bmp
 	  outputs:
 		stdout:
 			0: '^alpha=1$'
@@ -501,7 +523,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: bmp-core.bmp
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/bmp-core.bmp
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/bmp-core.bmp
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -515,7 +537,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: exr-gray.exr
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/exr-gray.exr
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/exr-gray.exr
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -530,7 +552,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: exr-rgb-half.exr
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/exr-rgb-half.exr
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/exr-rgb-half.exr
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -545,7 +567,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: exr-rgba.exr
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/exr-rgba.exr
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/exr-rgba.exr
 	  outputs:
 		stdout:
 			0: '^alpha=1$'
@@ -560,7 +582,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: hdr-ffmpeg.hdr
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/hdr-ffmpeg.hdr
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/hdr-ffmpeg.hdr
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -576,7 +598,7 @@ tests:
 		!stderr:
 			0: ''
 	- desc: hdr-xyze.hdr
-	  cmd: bash {shared.probe.sh} dats/fixtures/meta/hdr-xyze.hdr
+	  cmd: dats/lib/run.sh {shared.probe.sh}dats/fixtures/meta/hdr-xyze.hdr
 	  outputs:
 		stdout:
 			0: '^alpha=0$'
@@ -592,56 +614,56 @@ tests:
 		!stderr:
 			0: ''
 	- desc: bad-empty.bin is rejected
-	  cmd: bash {shared.neg.sh} dats/fixtures/meta/bad-empty.bin
+	  cmd: dats/lib/run.sh {shared.neg.sh}dats/fixtures/meta/bad-empty.bin
 	  outputs:
 		stdout:
 			0: '^rc=1 keys=0$'
 		!stderr:
 			0: ''
 	- desc: bad-text.txt is rejected
-	  cmd: bash {shared.neg.sh} dats/fixtures/meta/bad-text.txt
+	  cmd: dats/lib/run.sh {shared.neg.sh}dats/fixtures/meta/bad-text.txt
 	  outputs:
 		stdout:
 			0: '^rc=1 keys=0$'
 		!stderr:
 			0: ''
 	- desc: bad-png-trunc.png is rejected
-	  cmd: bash {shared.neg.sh} dats/fixtures/meta/bad-png-trunc.png
+	  cmd: dats/lib/run.sh {shared.neg.sh}dats/fixtures/meta/bad-png-trunc.png
 	  outputs:
 		stdout:
 			0: '^rc=1 keys=0$'
 		!stderr:
 			0: ''
 	- desc: bad-jpeg-trunc.jpg is rejected
-	  cmd: bash {shared.neg.sh} dats/fixtures/meta/bad-jpeg-trunc.jpg
+	  cmd: dats/lib/run.sh {shared.neg.sh}dats/fixtures/meta/bad-jpeg-trunc.jpg
 	  outputs:
 		stdout:
 			0: '^rc=1 keys=0$'
 		!stderr:
 			0: ''
 	- desc: bad-soi-only.jpg is rejected
-	  cmd: bash {shared.neg.sh} dats/fixtures/meta/bad-soi-only.jpg
+	  cmd: dats/lib/run.sh {shared.neg.sh}dats/fixtures/meta/bad-soi-only.jpg
 	  outputs:
 		stdout:
 			0: '^rc=1 keys=0$'
 		!stderr:
 			0: ''
 	- desc: bad-exr-trunc.exr is rejected
-	  cmd: bash {shared.neg.sh} dats/fixtures/meta/bad-exr-trunc.exr
+	  cmd: dats/lib/run.sh {shared.neg.sh}dats/fixtures/meta/bad-exr-trunc.exr
 	  outputs:
 		stdout:
 			0: '^rc=1 keys=0$'
 		!stderr:
 			0: ''
 	- desc: bad-hdr-nores.hdr is rejected
-	  cmd: bash {shared.neg.sh} dats/fixtures/meta/bad-hdr-nores.hdr
+	  cmd: dats/lib/run.sh {shared.neg.sh}dats/fixtures/meta/bad-hdr-nores.hdr
 	  outputs:
 		stdout:
 			0: '^rc=1 keys=0$'
 		!stderr:
 			0: ''
 	- desc: bad-hdr-zero.hdr is rejected
-	  cmd: bash {shared.neg.sh} dats/fixtures/meta/bad-hdr-zero.hdr
+	  cmd: dats/lib/run.sh {shared.neg.sh}dats/fixtures/meta/bad-hdr-zero.hdr
 	  outputs:
 		stdout:
 			0: '^rc=1 keys=0$'

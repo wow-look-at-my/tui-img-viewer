@@ -54,7 +54,7 @@ state_init() {
 	# The stat options that print the size and time of an entry, and its mode and owner.
 	STAT_LIST=() STAT_MODE=()
 	# What this bash and the tools of this host can do.
-	READ_FRAC=0 NAP=() SORT_NAME=() TIME_BUILTIN=0 DATE_AT=()
+	READ_FRAC=0 NAP=() SORT_NAME=() TIME_BUILTIN=0 DATE_OPT=-d DATE_PRE=@
 
 	# Options.
 	QUALITY=2 SHOW_HIDDEN=0 SORT=name RATE_BPS=131072 START_PATH=.

@@ -108,11 +108,7 @@ probe_host() {
 		fi
 	fi
 	# GNU and busybox date take the time after "-d @", BSD date after "-r".
-	if date -d @0 +%s >/dev/null 2>&1; then
-		DATE_AT=(-d @)
-	else
-		DATE_AT=(-r '')
-	fi
+	date -d @0 +%s >/dev/null 2>&1 || DATE_OPT=-r DATE_PRE=''
 
 	command -v ffmpeg >/dev/null && HAVE_FFMPEG=1
 	command -v ffprobe >/dev/null && HAVE_FFPROBE=1

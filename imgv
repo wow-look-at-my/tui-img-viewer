@@ -64,7 +64,7 @@ state_init() {
 	# The stat options that print the size and time of an entry, and its mode and owner.
 	STAT_LIST=() STAT_MODE=()
 	# What this bash and the tools of this host can do.
-	READ_FRAC=0 NAP=() SORT_NAME=() TIME_BUILTIN=0 DATE_AT=()
+	READ_FRAC=0 NAP=() SORT_NAME=() TIME_BUILTIN=0 DATE_OPT=-d DATE_PRE=@
 
 	# Options.
 	QUALITY=2 SHOW_HIDDEN=0 SORT=name RATE_BPS=131072 START_PATH=.
@@ -186,7 +186,7 @@ time_text() {
 	if (( TIME_BUILTIN )); then
 		printf -v REPLY '%(%Y-%m-%d %H:%M)T' "$1"
 	else
-		REPLY=$(date "${DATE_AT[@]}$1" '+%Y-%m-%d %H:%M' 2>/dev/null) || REPLY='?'
+		REPLY=$(date "$DATE_OPT" "$DATE_PRE$1" '+%Y-%m-%d %H:%M' 2>/dev/null) || REPLY='?'
 	fi
 }
 
@@ -631,7 +631,7 @@ dir_load() {
 	esac
 
 	local -a dn=() dl=() ds=() dm=() fn=() fk=() fl=() fs=() fm=() fimg=()
-	local target type size mtime name reason= failed=0
+	local target type size mtime name reason='' failed=0
 	# The messages of the tools would damage the screen, so they go to a file.
 	(
 		set -o pipefail
@@ -803,6 +803,8 @@ search_jump() {
 
 # The results. Each key K has a variable META_K, and an empty one means: not known.
 META_KEYS='alpha bits color data_offset datetime detail exposure fnumber focal format height iso lens make model orientation scan_order width'
+# shellcheck disable=SC2034 # only the test suite reads this result
+META_alpha=''
 # Bytes of the last read, its file offset, and scratch results of the helpers.
 META_B=()
 META_BOFF=0 META_EOF=0 META_I=0 META_N=0 META_D=0 META_LE=0 META_XPTR=0
@@ -3187,11 +3189,7 @@ probe_host() {
 		fi
 	fi
 	# GNU and busybox date take the time after "-d @", BSD date after "-r".
-	if date -d @0 +%s >/dev/null 2>&1; then
-		DATE_AT=(-d @)
-	else
-		DATE_AT=(-r '')
-	fi
+	date -d @0 +%s >/dev/null 2>&1 || DATE_OPT=-r DATE_PRE=''
 
 	command -v ffmpeg >/dev/null && HAVE_FFMPEG=1
 	command -v ffprobe >/dev/null && HAVE_FFPROBE=1
