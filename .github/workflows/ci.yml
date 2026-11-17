@@ -40,3 +40,26 @@ jobs:
       - name: shellcheck the single script
         if: always()
         run: shellcheck --norc -s bash imgv
+
+  publish:
+    needs: test
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      id-token: write
+      contents: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@v4
+      # imgv is one bash script, so the same file fills every os/arch slot of the buildhost project imgv.
+      - run: |
+          mkdir dist
+          for os in linux darwin; do
+            for arch in amd64 arm64; do
+              cp imgv "dist/imgv_${os}_${arch}"
+            done
+          done
+      - uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish@lkgb
+        with:
+          project: imgv
+          path: dist
+          default_branch: ${{ github.event.repository.default_branch }}

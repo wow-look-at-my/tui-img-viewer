@@ -3,5 +3,7 @@
 # includes each piece as plain text, so the result is readable.
 set -o errexit -o nounset -o pipefail
 cd "$(dirname "$0")"
-bashfs package --encoding plain imgv.sh | dd of=imgv status=none
-chmod +x imgv
+# A failed package must not empty imgv, so the result goes to a temporary file first.
+bashfs package --encoding plain imgv.sh > imgv.tmp
+chmod +x imgv.tmp
+mv imgv.tmp imgv
