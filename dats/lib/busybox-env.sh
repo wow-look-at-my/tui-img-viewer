@@ -29,7 +29,9 @@ if [[ ! -x $dir/bash ]]; then
 	if ! (
 		cd "$src/bash-$version"
 		# The source is older than the C standard of a current compiler.
-		ac_cv_func_working_mktime=yes ./configure --without-bash-malloc --disable-nls CFLAGS='-O1 -std=gnu89 -w'
+		# The tools that the build runs on the host take CFLAGS_FOR_BUILD.
+		ac_cv_func_working_mktime=yes ./configure --without-bash-malloc --disable-nls \
+			CFLAGS='-O1 -std=gnu89 -w' CFLAGS_FOR_BUILD='-O1 -std=gnu89 -w'
 		make -j "$(nproc)"
 	) > "$src/build.log" 2>&1; then
 		# The parallel build writes much after the error, so the error lines come first.
