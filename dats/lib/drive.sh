@@ -128,6 +128,20 @@ if LC_ALL=C grep -q $'\xf4\x8e\xbb\xae' "$work/stream"; then
 else
 	echo 'image cells on the terminal: no'
 fi
+# An image that did not arrive whole is hard to explain from the summary.
+# The events and the end of the stream then follow, for the report of a failed test.
+if [[ $last != *complete && $last != none ]]; then
+	echo '== events =='
+	start=
+	while read -r ms kind detail size; do
+		start=${start:-$ms}
+		[[ $detail == *';'* ]] && detail=${detail%%;*}
+		echo "+$(( ms - start )) $kind ${detail:0:60} ${size-}"
+	done < "$work/events"
+	echo '== end of stream =='
+	tail -c 400 "$work/stream" | cat -v | tr '\n' ' '
+	echo
+fi
 if [[ -n ${KEEP_WORK-} ]]; then
 	echo "work directory: $work"
 else
