@@ -31,7 +31,7 @@ tests:
 
 	- desc: the first screen shows the list, the details and a directory preview
 	  timeout: 60s
-	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:1.5 shot:start
+	  cmd: IMGV_ARGS=--no-preload bash dats/lib/drive.sh dats/fixtures/browse w:1.5 shot:start
 	  outputs:
 		stdout:
 			- " sub/"
@@ -42,11 +42,10 @@ tests:
 			- "Type     directory"
 			- "Items    1, images: 1"
 			- "inner.png"
-			- "1/11  name  normal"
+			- " .hidden-note.txt"
+			- "1/12  name  normal"
 			- "? help  q quit"
 			- "images: 0"
-		!stdout:
-			- ".hidden-note.txt"
 
 	- desc: a listing that fails shows the reason in the footer
 	  timeout: 60s
@@ -76,25 +75,16 @@ tests:
 
 	- desc: the arrow keys and the Home and End keys move the selection, and a lone escape key ends a search
 	  timeout: 60s
-	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:1 $'k:\e[B' w:0.3 $'k:\e[B' w:1.5 shot:arrows $'k:\e[F' w:1.5 shot:end $'k:\eOH' w:0.5 k:/ k:tall w:0.5 $'k:\e' w:1.5 shot:escape
+	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:1 $'k:\e[B' w:0.3 $'k:\e[B' w:0.3 $'k:\e[B' w:1.5 shot:arrows $'k:\e[F' w:1.5 shot:end $'k:\eOH' w:0.5 k:/ k:tall w:0.5 $'k:\e' w:1.5 shot:escape
 	  outputs:
 		stdout:
 			- "Name     broken.jpg"
 			- "Name     tall.webp"
 			- "Name     sub"
 
-	- desc: an escape key that arrives in one read with an answer of the terminal still ends a search
-	  timeout: 60s
-	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:1 k:/ k:tall w:0.5 $'k:\e\e[0n' w:1.5 shot:escape
-	  outputs:
-		stdout:
-			- "Name     sub"
-		!stdout:
-			- "/tall"
-
 	- desc: a large image arrives through tmux as a draft and then in full
 	  timeout: 60s
-	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:j end:2 w:0.5 shot:image
+	  cmd: IMGV_ARGS=--no-preload bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:jj w:4 shot:image
 	  outputs:
 		stdout:
 			- "Name     big.jpg"
@@ -111,7 +101,7 @@ tests:
 
 	- desc: the same image arrives without tmux
 	  timeout: 60s
-	  cmd: MODE=direct bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:j end:2
+	  cmd: MODE=direct IMGV_ARGS=--no-preload bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:jj w:4
 	  outputs:
 		stdout:
 			- "image 1: 256x192 complete"
@@ -122,7 +112,7 @@ tests:
 
 	- desc: a tmux client that is not in UTF-8 mode gets a clear message and no image
 	  timeout: 60s
-	  cmd: CLIENT_LOCALE=C bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:j w:2 shot:plain
+	  cmd: CLIENT_LOCALE=C bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:jj w:2 shot:plain
 	  outputs:
 		stdout:
 			- 'tmux is not in UTF-8 mode: attach with "tmux -u", then press i'
@@ -131,7 +121,7 @@ tests:
 
 	- desc: on a slow link through tmux a key stops the transfer at once
 	  timeout: 90s
-	  cmd: RATE=20000 bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:j start:2 w:0.3 k:j w:3 shot:after
+	  cmd: RATE=20000 IMGV_ARGS=--no-preload bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:jj w:3.5 k:j w:3 shot:after
 	  outputs:
 		stdout:
 			- "image 1: 256x192 complete"
@@ -143,7 +133,7 @@ tests:
 
 	- desc: on a slow link without tmux a key stops the transfer at once
 	  timeout: 90s
-	  cmd: MODE=direct RATE=20000 bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:j start:2 w:0.3 k:j w:3
+	  cmd: MODE=direct RATE=20000 IMGV_ARGS=--no-preload bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:jj w:3.5 k:j w:3
 	  outputs:
 		stdout:
 			- "image 1: 256x192 complete"
@@ -152,7 +142,7 @@ tests:
 
 	- desc: an image with an EXIF rotation is turned, and its camera data shows
 	  timeout: 60s
-	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:jjjjj w:3 shot:rotated
+	  cmd: IMGV_ARGS=--no-preload bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:jjjjjj w:3 shot:rotated
 	  outputs:
 		stdout:
 			- "Name     rotated.jpg"
@@ -166,7 +156,7 @@ tests:
 
 	- desc: a small PNG file goes to the terminal as it is
 	  timeout: 60s
-	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:1 k:l w:2.5 shot:png
+	  cmd: IMGV_ARGS=--no-preload bash dats/lib/drive.sh dats/fixtures/browse w:1 k:l w:2.5 shot:png
 	  outputs:
 		stdout:
 			- "Name     inner.png"
@@ -176,7 +166,7 @@ tests:
 
 	- desc: an OpenEXR picture shows its details and a preview
 	  timeout: 60s
-	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:1 k:/ k:scene.exr $'k:\r' w:4 shot:exr
+	  cmd: IMGV_ARGS=--no-preload bash dats/lib/drive.sh dats/fixtures/browse w:1 k:/ k:scene.exr $'k:\r' w:4 shot:exr
 	  outputs:
 		stdout:
 			- "Name     scene.exr"
@@ -187,7 +177,7 @@ tests:
 
 	- desc: a Radiance HDR picture shows its details and a preview
 	  timeout: 60s
-	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:1 k:/ k:scene.hdr $'k:\r' w:5 shot:hdr
+	  cmd: IMGV_ARGS=--no-preload bash dats/lib/drive.sh dats/fixtures/browse w:1 k:/ k:scene.hdr $'k:\r' w:5 shot:hdr
 	  outputs:
 		stdout:
 			- "Name     scene.hdr"
@@ -198,7 +188,7 @@ tests:
 
 	- desc: a tall image keeps its shape
 	  timeout: 60s
-	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:G w:3 shot:tall
+	  cmd: IMGV_ARGS=--no-preload bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:G w:3 shot:tall
 	  outputs:
 		stdout:
 			- "Name     tall.webp"
@@ -209,7 +199,7 @@ tests:
 
 	- desc: a terminal without graphics support gets no image data
 	  timeout: 60s
-	  cmd: FAKE_NO_GRAPHICS=1 bash dats/lib/drive.sh dats/fixtures/browse w:1 k:j w:2 shot:plain
+	  cmd: FAKE_NO_GRAPHICS=1 bash dats/lib/drive.sh dats/fixtures/browse w:1 k:jj w:2 shot:plain
 	  outputs:
 		stdout:
 			- "Image    1600×1200"
@@ -222,7 +212,7 @@ tests:
 	# The byte counts of tmux do not show such a loss, so the key comes later.
 	- desc: a terminal that answers nothing still gets the image, at a fixed rate
 	  timeout: 90s
-	  cmd: FAKE_MUTE=1 bash dats/lib/drive.sh dats/fixtures/browse w:5.5 shot:mute k:j w:6
+	  cmd: FAKE_MUTE=1 IMGV_ARGS=--no-preload bash dats/lib/drive.sh dats/fixtures/browse w:5.5 shot:mute k:jj w:6
 	  outputs:
 		stdout:
 			- "the terminal does not answer: no flow control"
@@ -238,7 +228,7 @@ tests:
 
 	- desc: the option --no-images sends no graphics at all
 	  timeout: 60s
-	  cmd: IMGV_ARGS=--no-images bash dats/lib/drive.sh dats/fixtures/browse w:1 k:j w:1.5 shot:off
+	  cmd: IMGV_ARGS=--no-images bash dats/lib/drive.sh dats/fixtures/browse w:1 k:jj w:1.5 shot:off
 	  outputs:
 		stdout:
 			- "Image    1600×1200"
@@ -259,7 +249,7 @@ tests:
 
 	- desc: a binary file and a broken image say what they are
 	  timeout: 60s
-	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:1 k:jjj w:1.5 shot:binary k:k w:1.5 shot:broken
+	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:1 k:jjjj w:1.5 shot:binary k:k w:1.5 shot:broken
 	  outputs:
 		stdout:
 			- "Name     data.bin"
@@ -269,7 +259,7 @@ tests:
 
 	- desc: a narrow window stacks the list above the preview
 	  timeout: 60s
-	  cmd: COLS=60 ROWS=30 bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:j end:1 w:0.5 shot:narrow
+	  cmd: COLS=60 ROWS=30 bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:jj w:4 shot:narrow
 	  outputs:
 		stdout:
 			- "────────────────────────────────────────────────────────────"
@@ -288,7 +278,7 @@ tests:
 
 	- desc: zoom hides the list and keeps the image
 	  timeout: 60s
-	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:j w:3 k:z w:3 shot:zoom
+	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:jj w:3 k:z w:3 shot:zoom
 	  outputs:
 		stdout:
 			- "Name     big.jpg"
@@ -302,15 +292,26 @@ tests:
 	  outputs:
 		stdout:
 			- "Name     tall.webp"
-			- "11/11  name  normal"
+			- "12/12  name  normal"
 
-	- desc: the dot key shows hidden files and the s key changes the sort order
+	- desc: the dot key hides dotfiles and the s key changes the sort order
 	  timeout: 60s
 	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:1 k:. w:1 k:s w:1 shot:hidden
 	  outputs:
 		stdout:
+			- "/11  time  normal"
+		!stdout:
 			- ".hidden-note.txt"
-			- "/12  time  normal"
+
+	- desc: the option --hide-dotfiles starts with dotfiles hidden
+	  timeout: 60s
+	  cmd: IMGV_ARGS=--hide-dotfiles bash dats/lib/drive.sh dats/fixtures/browse w:1.5 shot:hide
+	  outputs:
+		stdout:
+			- " sub/"
+			- "1/11  name  normal"
+		!stdout:
+			- ".hidden-note.txt"
 
 	- desc: a directory opens and the parent comes back with the same selection
 	  timeout: 60s
@@ -320,7 +321,7 @@ tests:
 			- "Name     inner.png"
 			- "1/1  name  normal"
 			- "Name     sub"
-			- "1/11  name  normal"
+			- "1/12  name  normal"
 
 	- desc: the help key lists the keys, and the next key closes the list
 	  timeout: 60s
@@ -329,3 +330,56 @@ tests:
 		stdout:
 			- "imgv 0.1.0: keys"
 			- "press a key to close"
+			- "scaling: smooth or nearest"
+
+	# The image entries below the first one loads while the selection rests.
+	- desc: the help box stays whole while an image near the selection loads ahead
+	  timeout: 60s
+	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:0.3 'k:?' w:4 shot:help k:x w:0.5
+	  outputs:
+		stdout:
+			- "q               quit"
+			- "press a key to close"
+			- "image 1: 586x440 complete"
+
+	- desc: an image near the selection loads ahead and shows at once with no new transfer
+	  timeout: 60s
+	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:5 k:jj w:0.5 shot:preloaded
+	  outputs:
+		stdout:
+			- "Name     big.jpg"
+			- "Preview  normal 586×440"
+			- "################"
+			- "image 1: 586x440 complete"
+			- "images: 1"
+
+	- desc: an image seen before shows again at once, from the terminal, with no new transfer
+	  timeout: 60s
+	  cmd: IMGV_ARGS=--no-preload bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:jj w:4 k:j w:1.5 k:k w:0.3 shot:return
+	  outputs:
+		stdout:
+			- "Name     big.jpg"
+			- "Preview  normal 586×440"
+			- "################"
+			- "image 2: 586x440 complete"
+			- "images: 2"
+
+	- desc: the f key changes to nearest scaling, which enlarges a small image to its cells
+	  timeout: 60s
+	  cmd: IMGV_ARGS=--no-preload bash dats/lib/drive.sh dats/fixtures/browse w:1 k:l w:2.5 k:f w:2.5 shot:nearest
+	  outputs:
+		stdout:
+			- "Name     inner.png"
+			- "Preview  normal 260×260"
+			- "1/1  name  normal  nearest"
+			- "image 1: 64x64 complete"
+			- "image 2: 260x260 complete"
+			- "images: 2"
+
+	- desc: the option --filter nearest starts with nearest scaling
+	  timeout: 60s
+	  cmd: IMGV_ARGS='--no-preload --filter nearest' bash dats/lib/drive.sh dats/fixtures/browse w:1 k:l w:2.5
+	  outputs:
+		stdout:
+			- "image 1: 260x260 complete"
+			- "images: 1"

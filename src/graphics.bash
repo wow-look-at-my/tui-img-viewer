@@ -41,11 +41,26 @@ gfx_init() {
 		utf8_char "0x$hex"
 		DIA+=("$REPLY")
 	done
-	# The image id travels in a color of the base palette, which every
-	# terminal setup keeps intact. The process id spreads the ids of two
-	# programs in one terminal.
-	ID_A=$(( 16 + $$ % 119 * 2 ))
-	ID_B=$(( ID_A + 1 ))
+	# The low byte of an image id travels in a color of the base palette,
+	# which every terminal setup keeps intact. The process id spreads the ids
+	# of two programs in one terminal. The high byte is a slot, see slot_new.
+	ID_LO=$(( 16 + $$ % 240 ))
+}
+
+# Sets REPLY to an image id that no image of this program uses.
+slot_new() {
+	local n id
+	for (( n = 0; n < SLOT_MAX; n++ )); do
+		SLOT=$(( SLOT % SLOT_MAX + 1 ))
+		id=$(( SLOT << 24 | ID_LO ))
+		(( id == SHOWN_ID || (TX_ACTIVE && id == TX_ID) )) && continue
+		[[ " $OLD_IDS " == *" $id "* ]] && continue
+		res_has_id "$id" && continue
+		REPLY=$id
+		return 0
+	done
+	# RES_MAX keeps slots free, so this point is not reached.
+	REPLY=$id
 }
 
 # Appends one graphics command to the frame.
@@ -56,16 +71,18 @@ gfx_cmd() {
 # Sets REPLY to the placeholder cells of image $1 at column $2, row $3,
 # for a box of $4 columns and $5 rows.
 placeholder_block() {
-	local id=$1 x=$2 y=$3 cols=$4 rows=$5 row tail=''
+	local id=$1 x=$2 y=$3 cols=$4 rows=$5 row tail='' high=''
 	local out=''
+	# The third mark holds the high byte of the id.
+	(( id >> 24 )) && high=${DIA[id >> 24]}
 	# Only the first cell of a row carries its row and column. A cell with
 	# no marks continues the cell on its left, which halves the bytes.
 	repeat $(( cols - 1 )) "$PH"
 	tail=$REPLY
 	for (( row = 0; row < rows; row++ )); do
-		out+=$'\e['"$(( y + row ));${x}H$PH${DIA[row]}${DIA[0]}$tail"
+		out+=$'\e['"$(( y + row ));${x}H$PH${DIA[row]}${DIA[0]}$high$tail"
 	done
-	REPLY=$'\e[38;5;'"${id}m$out"$'\e[39m'
+	REPLY=$'\e[38;5;'"$(( id & 255 ))m$out"$'\e[39m'
 }
 
 # Handles one answer to a graphics command.
@@ -130,14 +147,22 @@ tmux_dropped() {
 	(( TMUX_TAKEN - TX_BASE < TX_SENT ))
 }
 
-# After a loss the whole image goes out again, at half the rate.
+# After a loss the whole image goes out again, at half the rate. A loss after
+# the end damages an image that is already kept in the terminal.
 tx_lost() {
+	local active=$TX_ACTIVE
 	tx_abort
+	res_drop_id "$TX_ID"
+	if [[ $TX_OWNER == cur ]]; then
+		STAGE_DONE=0
+	elif (( active )); then
+		pf_clear
+	fi
 	(( RATE_NOW /= 2 ))
 	(( RATE_NOW < WIN_MIN )) && RATE_NOW=$WIN_MIN
 	rate_window
 	now_ms
-	STAGE_DONE=0 TX_LOST=0 TX_CHECK_UNTIL=0
+	TX_LOST=0 TX_CHECK_UNTIL=0
 	TX_RETRY_AT=$(( NOW + RETRY_MS ))
 	human_size "$RATE_NOW"
 	status "tmux dropped image data: sending the image again at $REPLY/s"
@@ -177,24 +202,17 @@ link_update() {
 	D_FOOTER=1
 }
 
-# Starts the transfer of the base64 file $1, which holds $2 bytes.
+# Starts the transfer of the base64 file $1, which holds $2 bytes. No other
+# transfer may be active. The caller sets TX_ID, TX_OWNER, TX_C x TX_R (the
+# cells), TX_W x TX_H (the pixels), TX_FINAL and TX_RKEY (the key to keep a
+# final image under).
 tx_begin() {
-	tx_abort
 	[[ -r $1 ]] || return 1
 	# The file holds one line for each graphics command. TX_NEXT is one line
 	# ahead, so the last line is known as the last.
 	exec 8< "$1"
 	TX_NEXT=
 	IFS= read -r -u 8 TX_NEXT
-	# A later stage of the shown image keeps its id. The terminal then
-	# replaces the picture in place, and the cells stay as they are.
-	if (( SHOWN_ID && STAGE_DONE > 0 )); then
-		TX_ID=$SHOWN_ID
-	elif (( SHOWN_ID == ID_A )); then
-		TX_ID=$ID_B
-	else
-		TX_ID=$ID_A
-	fi
 	TX_ACTIVE=1 TX_STARTED=0 TX_EOF=0 TX_WAIT=0 TX_PAUSED=0
 	TX_TOTAL=$2 TX_SENT=0 TX_WIN_SENT=0
 	# In fixed-rate mode one question at the start finds a terminal that answers again.
@@ -207,7 +225,7 @@ tx_begin() {
 		TX_BASE=$TMUX_TAKEN
 		# A later stage keeps the count of the first one, so a loss
 		# between two stages still shows.
-		(( STAGE_DONE > 0 )) || TX_DISCARDED=$TMUX_DISCARDED
+		[[ $TX_OWNER == cur ]] && (( STAGE_DONE > 0 )) || TX_DISCARDED=$TMUX_DISCARDED
 	fi
 	D_DETAILS=1
 }
@@ -288,7 +306,7 @@ tx_pump() {
 		if (( TX_STARTED )); then
 			ctrl="q=2,m=$more"
 		else
-			ctrl="q=2,a=T,U=1,f=100,i=$TX_ID,c=$BOX_C,r=$BOX_R,m=$more"
+			ctrl="q=2,a=T,U=1,f=100,i=$TX_ID,c=$TX_C,r=$TX_R,m=$more"
 			TX_STARTED=1
 		fi
 		out+="$GFX_PRE$ctrl;$chunk$GFX_SUF"
@@ -308,24 +326,108 @@ tx_pump() {
 	printf '%s' "$out"
 }
 
-# The whole image is in the terminal: show it.
+# The whole image is in the terminal. A final image stays there. The image
+# of the selection shows, and a preloaded image waits for its turn.
 tx_done() {
 	exec 8<&-
 	TX_ACTIVE=0
-	STAGE_DONE=$TX_STAGE
 	D_DETAILS=1
 	(( TX_BASE >= 0 )) && TX_CHECK_UNTIL=$(( NOW + CHECK_MS ))
+	(( TX_FINAL )) && res_add "$TX_RKEY" "$TX_ID" "$TX_W $TX_H $TX_TOTAL" $(( TX_W * TX_H * 4 ))
+	if [[ $TX_OWNER == pf ]]; then
+		pf_clear
+		return 0
+	fi
+	STAGE_DONE=$TX_STAGE
 	(( TX_ID == SHOWN_ID )) && return 0
 	placeholder_block "$TX_ID" "$BOX_X" "$BOX_Y" "$BOX_C" "$BOX_R"
-	OLD_ID=$SHOWN_ID
+	(( SHOWN_ID )) && OLD_IDS+=" $SHOWN_ID"
 	SHOWN_ID=$TX_ID SHOWN_PH=$REPLY
 	PV_KIND=image
 	D_PREVIEW=1
 }
 
-# Removes the shown image from the terminal.
+# Takes the shown image off the screen. An image that the terminal keeps
+# stays in the terminal.
 image_hide() {
 	(( SHOWN_ID )) || return 0
-	gfx_cmd "q=2,a=d,d=I,i=$SHOWN_ID"
+	res_has_id "$SHOWN_ID" || gfx_cmd "q=2,a=d,d=I,i=$SHOWN_ID"
 	SHOWN_ID=0 SHOWN_PH=
+}
+
+# Images that stay in the terminal. Each one is the last stage of a preview,
+# kept under the key of its job, so a return to the entry shows it at once.
+
+# Sets REPLY to the index of the kept image with the key $1.
+res_find() {
+	local i
+	for (( i = ${#RES_KEY[@]} - 1; i >= 0; i-- )); do
+		if [[ ${RES_KEY[i]} == "$1" ]]; then
+			REPLY=$i
+			return 0
+		fi
+	done
+	return 1
+}
+
+# Succeeds when the image id $1 is kept. Sets REPLY to its index.
+res_has_id() {
+	local i
+	for (( i = 0; i < ${#RES_ID[@]}; i++ )); do
+		if (( RES_ID[i] == $1 )); then
+			REPLY=$i
+			return 0
+		fi
+	done
+	return 1
+}
+
+# res_add KEY ID DIM PIXEL_BYTES keeps a finished image. DIM is "w h bytes".
+# The oldest images leave the terminal when there are too many or too large.
+res_add() {
+	res_find "$1" && res_remove "$REPLY"
+	RES_KEY+=("$1") RES_ID+=("$2") RES_DIM+=("$3") RES_PX+=("$4")
+	(( RES_TOTAL += $4 ))
+	local i=0
+	while (( ${#RES_KEY[@]} > RES_MAX || RES_TOTAL > RES_BUDGET )) && (( i < ${#RES_KEY[@]} - 1 )); do
+		if (( RES_ID[i] == SHOWN_ID )); then
+			(( i++ ))
+			continue
+		fi
+		res_remove "$i"
+	done
+}
+
+# Removes the kept image at index $1. The terminal frees it unless it shows.
+res_remove() {
+	local i=$1 id=${RES_ID[$1]}
+	(( id == SHOWN_ID )) || gfx_cmd "q=2,a=d,d=I,i=$id"
+	(( RES_TOTAL -= RES_PX[i] ))
+	RES_KEY=("${RES_KEY[@]:0:i}" "${RES_KEY[@]:i+1}")
+	RES_ID=("${RES_ID[@]:0:i}" "${RES_ID[@]:i+1}")
+	RES_DIM=("${RES_DIM[@]:0:i}" "${RES_DIM[@]:i+1}")
+	RES_PX=("${RES_PX[@]:0:i}" "${RES_PX[@]:i+1}")
+}
+
+res_drop_id() {
+	res_has_id "$1" && res_remove "$REPLY"
+	return 0
+}
+
+# Shows the kept image at index $1 as the image of the selection.
+res_show() {
+	local i=$1 id=${RES_ID[$1]} dim=${RES_DIM[$1]}
+	(( TX_ACTIVE )) && [[ $TX_OWNER == cur ]] && tx_abort
+	STAGE_W=${dim%% *} dim=${dim#* }
+	STAGE_H=${dim%% *} STAGE_BYTES=${dim#* }
+	STAGE_DONE=$STAGES TX_STAGE=$STAGES
+	# The image moves to the end, as the one with the latest use.
+	RES_KEY+=("${RES_KEY[i]}") RES_ID+=("$id") RES_DIM+=("${RES_DIM[i]}") RES_PX+=("${RES_PX[i]}")
+	(( RES_TOTAL += RES_PX[i] ))
+	(( SHOWN_ID && SHOWN_ID != id )) && OLD_IDS+=" $SHOWN_ID"
+	SHOWN_ID=$id
+	res_remove "$i"
+	placeholder_block "$id" "$BOX_X" "$BOX_Y" "$BOX_C" "$BOX_R"
+	SHOWN_PH=$REPLY PV_KIND=image
+	D_PREVIEW=1 D_DETAILS=1
 }

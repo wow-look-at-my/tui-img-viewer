@@ -16,31 +16,24 @@ for tool in tmux ffmpeg ffprobe; do
 	ln -s "$(command -v "$tool")" "$dir/bin/$tool"
 done
 
+build_bash() {
+	# The source is older than the C standard of a current compiler. The
+	# helper programs of the build take their own flags.
+	ac_cv_func_working_mktime=yes ./configure --without-bash-malloc --disable-nls \
+		CFLAGS='-O1 -std=gnu89 -w' CFLAGS_FOR_BUILD='-O1 -std=gnu89 -w'
+	make -j "$(nproc)"
+	cp bash "$dir/bash"
+}
+
 if [[ ! -x $dir/bash ]]; then
 	# The parser in the archive is older than its source, so the build makes it again.
 	if ! command -v bison > /dev/null && ! command -v yacc > /dev/null; then
 		echo 'busybox-env.sh: the build of bash needs bison or yacc' >&2
 		exit 1
 	fi
-	src=$(mktemp -d)
-	curl -fsSL -o "$src/bash.tar.gz" "https://ftp.gnu.org/gnu/bash/bash-$version.tar.gz"
-	echo "$sha256  $src/bash.tar.gz" | sha256sum -c - > /dev/null
-	tar -xzf "$src/bash.tar.gz" -C "$src"
-	if ! (
-		cd "$src/bash-$version"
-		# The source is older than the C standard of a current compiler.
-		# The tools that the build runs on the host take CFLAGS_FOR_BUILD.
-		ac_cv_func_working_mktime=yes ./configure --without-bash-malloc --disable-nls \
-			CFLAGS='-O1 -std=gnu89 -w' CFLAGS_FOR_BUILD='-O1 -std=gnu89 -w'
-		make -j "$(nproc)"
-	) > "$src/build.log" 2>&1; then
-		# The parallel build writes much after the error, so the error lines come first.
-		grep -i -B 3 -A 8 'error' "$src/build.log" | tail -n 60 >&2 || true
-		tail -n 5 "$src/build.log" >&2
-		exit 1
-	fi
-	cp "$src/bash-$version/bash" "$dir/bash"
-	rm -rf -- "$src"
+	# shellcheck source=dats/lib/build-source.sh
+	source "${BASH_SOURCE%/*}/build-source.sh"
+	build_source "https://ftp.gnu.org/gnu/bash/bash-$version.tar.gz" "$sha256" build_bash
 fi
 # sed reads to the end, so the writer gets no broken pipe.
 "$dir/bash" --version | sed -n 1p
