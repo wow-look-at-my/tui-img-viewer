@@ -10,9 +10,9 @@ tests:
 	  outputs:
 		stdout:
 			- "Name     small.png"
-			- "Preview  normal 613×460"
+			- "Preview  normal 586×440"
 			- "image 1: 256x192 complete"
-			- "image 2: 613x460 complete"
+			- "image 2: 586x440 complete"
 			- "images: 2"
 		!stdout:
 			- "Option not found"
