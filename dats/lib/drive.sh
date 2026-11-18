@@ -38,6 +38,23 @@ while [[ ! -p $work/in ]]; do
 	sleep 0.05
 done
 exec 9> "$work/in"
+
+# Waits until the events file holds $2 lines that match the pattern $1. A slow host then gets more time, not a different test.
+late=0
+await() {
+	local pattern=$1 want=$2 n tries=0
+	while :; do
+		n=$(grep -c -E -- "$pattern" "$work/events" 2>/dev/null)
+		(( ${n:-0} >= want )) && return 0
+		if (( ++tries > 600 )); then
+			echo "drive.sh: after 30 s the terminal still has $n of $want events that match: $pattern" >&2
+			late=1
+			return 1
+		fi
+		sleep 0.05
+	done
+}
+
 for step in "$@"; do
 	case $step in
 		k:*)
@@ -46,6 +63,10 @@ for step in "$@"; do
 			printf '%s' "${step#k:}" >&9
 			;;
 		w:*) sleep "${step#w:}" ;;
+		# The transfer of image N started.
+		start:*) await '^[0-9]+ gfx [^ ]*a=T' "${step#start:}" ;;
+		# The transfer of image N ended.
+		end:*) await '^[0-9]+ image ' "${step#end:}" ;;
 		shot:*) screen "${step#shot:}" ;;
 		*)
 			echo "drive.sh: unknown step: $step" >&2
@@ -133,3 +154,5 @@ if [[ -n ${KEEP_WORK-} ]]; then
 else
 	rm -rf -- "$work"
 fi
+(( late )) && exit 1
+exit 0

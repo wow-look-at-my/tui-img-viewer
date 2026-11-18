@@ -83,9 +83,18 @@ tests:
 			- "Name     tall.webp"
 			- "Name     sub"
 
+	- desc: an escape key that arrives in one read with an answer of the terminal still ends a search
+	  timeout: 60s
+	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:1 k:/ k:tall w:0.5 $'k:\e\e[0n' w:1.5 shot:escape
+	  outputs:
+		stdout:
+			- "Name     sub"
+		!stdout:
+			- "/tall"
+
 	- desc: a large image arrives through tmux as a draft and then in full
 	  timeout: 60s
-	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:j w:4 shot:image
+	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:j end:2 w:0.5 shot:image
 	  outputs:
 		stdout:
 			- "Name     big.jpg"
@@ -102,7 +111,7 @@ tests:
 
 	- desc: the same image arrives without tmux
 	  timeout: 60s
-	  cmd: MODE=direct bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:j w:4
+	  cmd: MODE=direct bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:j end:2
 	  outputs:
 		stdout:
 			- "image 1: 256x192 complete"
@@ -122,7 +131,7 @@ tests:
 
 	- desc: on a slow link through tmux a key stops the transfer at once
 	  timeout: 90s
-	  cmd: RATE=20000 bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:j w:3.5 k:j w:3 shot:after
+	  cmd: RATE=20000 bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:j start:2 w:0.3 k:j w:3 shot:after
 	  outputs:
 		stdout:
 			- "image 1: 256x192 complete"
@@ -134,7 +143,7 @@ tests:
 
 	- desc: on a slow link without tmux a key stops the transfer at once
 	  timeout: 90s
-	  cmd: MODE=direct RATE=20000 bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:j w:3.5 k:j w:3
+	  cmd: MODE=direct RATE=20000 bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:j start:2 w:0.3 k:j w:3
 	  outputs:
 		stdout:
 			- "image 1: 256x192 complete"
@@ -260,7 +269,7 @@ tests:
 
 	- desc: a narrow window stacks the list above the preview
 	  timeout: 60s
-	  cmd: COLS=60 ROWS=30 bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:j w:4 shot:narrow
+	  cmd: COLS=60 ROWS=30 bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:j end:2 w:0.5 shot:narrow
 	  outputs:
 		stdout:
 			- "────────────────────────────────────────────────────────────"

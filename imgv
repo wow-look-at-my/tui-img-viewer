@@ -2861,6 +2861,11 @@ input_escape() {
 			KEY=ESC
 			(( pos++ ))
 			;;
+		$'\e')
+			# The escape key, and then a sequence. An answer of the terminal can follow the key in the same read.
+			KEY=ESC
+			(( pos++ ))
+			;;
 		'[')
 			# A control sequence ends at the first byte from "@" to "~".
 			for (( i = pos + 2; i < len && i < pos + 36; i++ )); do
