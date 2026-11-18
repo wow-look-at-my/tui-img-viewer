@@ -107,7 +107,7 @@ limit=524288
 # A count of bytes, not of time, keeps a slow host from failing the test. The throttle of the fake terminal falls behind its
 # rate there.
 budget=$(( rate * 3 / 2 ))
-images=0 window=0 over=0 queried=no last_key=0 after=0 open=0 last=none
+images=0 window=0 over=0 queried=no last_key=0 after=0 open=0 last=none slow_stop=0
 while read -r ms kind detail size; do
 	case $kind in
 		key) last_key=$ms after=0 ;;
@@ -135,12 +135,17 @@ while read -r ms kind detail size; do
 					last='stopped soon after a key'
 				else
 					last="damaged or stopped, $(( ms - last_key )) ms and $after bytes after the last key"
+					slow_stop=$last_key
 				fi
 				echo "image $images: $last"
 			fi
 			;;
 	esac
 done < "$work/events"
+if (( slow_stop )); then
+	echo 'drive.sh: what the terminal got after the key of the slow stop:' >&2
+	awk -v k="$slow_stop" '$1 >= k' "$work/events" | head -n 60 >&2
+fi
 echo "images: $images"
 echo "last image: $last"
 echo "graphics query: $queried"
