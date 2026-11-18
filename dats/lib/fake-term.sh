@@ -93,7 +93,8 @@ respond() {
 	while :; do
 		IFS= read -r -N 4096 -t 0.02 chunk
 		rc=$?
-		pending+=$chunk
+		# Each escape byte starts a line. A tr in the pipe can hold a short write until more input comes, and a probe then waits.
+		pending+=${chunk//$'\e'/$'\n'}
 		while [[ $pending == *$'\n'* ]]; do
 			sequence "${pending%%$'\n'*}"
 			pending=${pending#*$'\n'}
@@ -127,5 +128,4 @@ cat < "$dir/in" |
 	"${pty[@]}" |
 	throttle |
 	tee "$dir/stream" |
-	stdbuf -o0 tr '\033' '\n' |
 	respond > "$dir/in"
