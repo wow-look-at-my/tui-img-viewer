@@ -199,14 +199,15 @@ main() {
 	dir_find "$start_name"
 	CUR=$REPLY
 	scroll_fix
-	now_ms
-	[[ $GFX == off ]] || handshake_send
 	if (( IN_TMUX )) && [[ $GFX != off ]] && ! tmux_utf8; then
 		GFX=noutf8
 		status 'tmux is not in UTF-8 mode, so images cannot show: attach with "tmux -u"'
 	fi
 	preview_reset
 	render
+	# The handshake time is the first round trip of the link.
+	now_ms
+	[[ $GFX == off ]] || handshake_send
 
 	while (( RUNNING )); do
 		preview_timeout

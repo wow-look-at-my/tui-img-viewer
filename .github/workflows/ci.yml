@@ -29,7 +29,7 @@ jobs:
             echo "::error::secret-server gave no BUILDHOST_READ_TOKEN, and the bashfs package needs one"
             exit 1
           fi
-          curl -fsSL -H "Authorization: Bearer $BUILDHOST_READ_TOKEN" https://apt.pazer.build/bashfs/install.sh \
+          curl -fsSL --retry 20 --retry-delay 3 --retry-all-errors -H "Authorization: Bearer $BUILDHOST_READ_TOKEN" https://apt.pazer.build/bashfs/install.sh \
             | sudo BUILDHOST_TOKEN="$BUILDHOST_READ_TOKEN" sh
           sudo apt-get install -y dats bashfs
       # dats/ffmpeg-min.dats runs imgv with an ffmpeg that has few formats. The hash puts a change of the build script into the cache key.
@@ -45,3 +45,25 @@ jobs:
       - name: shellcheck the single script
         if: always()
         run: shellcheck --norc -s bash imgv
+
+  publish:
+    needs: test
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || vars.CI_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      id-token: write
+      contents: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@v4
+      # imgv is one bash script, so the same file fills every os/arch slot. A repo publishes only in its own namespace, so the project is <repo>/imgv.
+      - run: |
+          mkdir dist
+          for os in linux darwin; do
+            for arch in amd64 arm64; do
+              cp imgv "dist/imgv_${os}_${arch}"
+            done
+          done
+      - uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish@lkgb
+        with:
+          path: dist
+          default_branch: ${{ github.event.repository.default_branch }}

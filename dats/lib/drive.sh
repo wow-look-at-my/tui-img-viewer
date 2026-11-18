@@ -38,6 +38,23 @@ while [[ ! -p $work/in ]]; do
 	sleep 0.05
 done
 exec 9> "$work/in"
+
+# Waits until the events file holds $2 lines that match the pattern $1. A slow host then gets more time, not a different test.
+late=0
+await() {
+	local pattern=$1 want=$2 n tries=0
+	while :; do
+		n=$(grep -c -E -- "$pattern" "$work/events" 2>/dev/null)
+		(( ${n:-0} >= want )) && return 0
+		if (( ++tries > 600 )); then
+			echo "drive.sh: after 30 s the terminal still has $n of $want events that match: $pattern" >&2
+			late=1
+			return 1
+		fi
+		sleep 0.05
+	done
+}
+
 for step in "$@"; do
 	case $step in
 		k:*)
@@ -46,6 +63,10 @@ for step in "$@"; do
 			printf '%s' "${step#k:}" >&9
 			;;
 		w:*) sleep "${step#w:}" ;;
+		# The transfer of image N started.
+		start:*) await '^[0-9]+ gfx [^ ]*a=T' "${step#start:}" ;;
+		# The transfer of image N ended.
+		end:*) await '^[0-9]+ image ' "${step#end:}" ;;
 		shot:*) screen "${step#shot:}" ;;
 		*)
 			echo "drive.sh: unknown step: $step" >&2
@@ -83,16 +104,19 @@ source "$root/src/metadata.bash"
 echo '== summary =='
 limit=524288
 [[ $mode == tmux ]] && limit=$(( cols * rows * 4 ))
-images=0 window=0 over=0 queried=no last_key=0 open=0 last=none
+# A count of bytes, not of time, keeps a slow host from failing the test. The throttle of the fake terminal falls behind its
+# rate there.
+budget=$(( rate * 3 / 2 ))
+images=0 window=0 over=0 queried=no last_key=0 after=0 open=0 last=none slow_stop=0
 while read -r ms kind detail size; do
 	case $kind in
-		key) last_key=$ms ;;
+		key) last_key=$ms after=0 ;;
 		probe)
 			(( window > limit )) && (( over++ ))
 			window=0
 			;;
 		gfx)
-			(( window += ${size:-0} ))
+			(( window += ${size:-0}, after += ${size:-0} ))
 			[[ $detail == *a=q* ]] && queried=yes
 			if [[ $detail == *a=T* ]]; then
 				# The end of the image before never came: tmux dropped it.
@@ -107,16 +131,21 @@ while read -r ms kind detail size; do
 				png=$work/img.$images.png
 				if [[ ${size:-0} != 0 || -s $png ]] && ffmpeg -nostdin -v error -i "$png" -f null - 2>/dev/null && meta_probe "$png"; then
 					last="${META_width}x${META_height} complete"
-				elif (( last_key && ms - last_key < 1500 )); then
+				elif (( last_key && (rate ? after <= budget : ms - last_key < 1500) )); then
 					last='stopped soon after a key'
 				else
-					last="damaged or stopped, $(( ms - last_key )) ms after the last key"
+					last="damaged or stopped, $(( ms - last_key )) ms and $after bytes after the last key"
+					slow_stop=$last_key
 				fi
 				echo "image $images: $last"
 			fi
 			;;
 	esac
 done < "$work/events"
+if (( slow_stop )); then
+	echo 'drive.sh: what the terminal got after the key of the slow stop:' >&2
+	awk -v k="$slow_stop" '$1 >= k' "$work/events" | head -n 60 >&2
+fi
 echo "images: $images"
 echo "last image: $last"
 echo "graphics query: $queried"
@@ -147,3 +176,5 @@ if [[ -n ${KEEP_WORK-} ]]; then
 else
 	rm -rf -- "$work"
 fi
+(( late )) && exit 1
+exit 0
