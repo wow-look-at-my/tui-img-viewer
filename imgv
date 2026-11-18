@@ -68,7 +68,7 @@ state_init() {
 	READ_FRAC=0 NAP=() NAP_IDLE=() SORT_NAME=() TIME_BUILTIN=0 DATE_OPT=-d DATE_PRE=@
 
 	# Options.
-	QUALITY=2 SHOW_HIDDEN=0 SORT=name RATE_BPS=131072 START_PATH=.
+	QUALITY=2 SHOW_HIDDEN=1 SORT=name RATE_BPS=131072 START_PATH=.
 
 	# Screen geometry, in cells. L = list, P = preview, D = details.
 	ROWS=24 COLS=80 TOO_SMALL=0 ZOOM=0 RESIZED=0
@@ -2706,7 +2706,7 @@ draw_help() {
 		'i               image previews on or off'
 		'/  n N          search, next match, previous match'
 		's               sort by name, time, size'
-		'.               show hidden files'
+		'.               hide or show dotfiles'
 		'r  ^L           load again, draw again'
 		'q               quit'
 	)
@@ -3088,7 +3088,8 @@ $PROG $VERSION - terminal file browser with image previews
 Usage: $PROG [options] [directory | file]
 
 Options:
-  -a, --all            show hidden files
+  -a, --all            show dotfiles (the default)
+  -H, --hide-dotfiles  start with dotfiles hidden
   -n, --no-images      start with image previews off
   -q, --quality LEVEL  preview quality: draft, normal, fine, full (default: normal)
       --rate KIB       send rate in KiB/s when the terminal gives no answers (default: 128)
@@ -3108,6 +3109,7 @@ parse_args() {
 		shift
 		case $arg in
 			-a | --all) SHOW_HIDDEN=1 ;;
+			-H | --hide-dotfiles) SHOW_HIDDEN=0 ;;
 			-n | --no-images) GFX=off ;;
 			-q | --quality)
 				(( $# )) || die "$arg needs a value"

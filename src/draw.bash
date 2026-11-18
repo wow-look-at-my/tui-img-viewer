@@ -201,7 +201,7 @@ draw_help() {
 		'i               image previews on or off'
 		'/  n N          search, next match, previous match'
 		's               sort by name, time, size'
-		'.               show hidden files'
+		'.               hide or show dotfiles'
 		'r  ^L           load again, draw again'
 		'q               quit'
 	)

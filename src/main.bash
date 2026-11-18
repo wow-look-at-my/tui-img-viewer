@@ -7,7 +7,8 @@ $PROG $VERSION - terminal file browser with image previews
 Usage: $PROG [options] [directory | file]
 
 Options:
-  -a, --all            show hidden files
+  -a, --all            show dotfiles (the default)
+  -H, --hide-dotfiles  start with dotfiles hidden
   -n, --no-images      start with image previews off
   -q, --quality LEVEL  preview quality: draft, normal, fine, full (default: normal)
       --rate KIB       send rate in KiB/s when the terminal gives no answers (default: 128)
@@ -27,6 +28,7 @@ parse_args() {
 		shift
 		case $arg in
 			-a | --all) SHOW_HIDDEN=1 ;;
+			-H | --hide-dotfiles) SHOW_HIDDEN=0 ;;
 			-n | --no-images) GFX=off ;;
 			-q | --quality)
 				(( $# )) || die "$arg needs a value"
