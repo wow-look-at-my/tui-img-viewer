@@ -104,16 +104,19 @@ source "$root/src/metadata.bash"
 echo '== summary =='
 limit=524288
 [[ $mode == tmux ]] && limit=$(( cols * rows * 4 ))
-images=0 window=0 over=0 queried=no last_key=0 open=0 last=none
+# A count of bytes, not of time, keeps a slow host from failing the test. The throttle of the fake terminal falls behind its
+# rate there.
+budget=$(( rate * 3 / 2 ))
+images=0 window=0 over=0 queried=no last_key=0 after=0 open=0 last=none
 while read -r ms kind detail size; do
 	case $kind in
-		key) last_key=$ms ;;
+		key) last_key=$ms after=0 ;;
 		probe)
 			(( window > limit )) && (( over++ ))
 			window=0
 			;;
 		gfx)
-			(( window += ${size:-0} ))
+			(( window += ${size:-0}, after += ${size:-0} ))
 			[[ $detail == *a=q* ]] && queried=yes
 			if [[ $detail == *a=T* ]]; then
 				# The end of the image before never came: tmux dropped it.
@@ -128,10 +131,10 @@ while read -r ms kind detail size; do
 				png=$work/img.$images.png
 				if [[ ${size:-0} != 0 || -s $png ]] && ffmpeg -nostdin -v error -i "$png" -f null - 2>/dev/null && meta_probe "$png"; then
 					last="${META_width}x${META_height} complete"
-				elif (( last_key && ms - last_key < 1500 )); then
+				elif (( last_key && (rate ? after <= budget : ms - last_key < 1500) )); then
 					last='stopped soon after a key'
 				else
-					last="damaged or stopped, $(( ms - last_key )) ms after the last key"
+					last="damaged or stopped, $(( ms - last_key )) ms and $after bytes after the last key"
 				fi
 				echo "image $images: $last"
 			fi
