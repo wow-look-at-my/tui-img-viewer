@@ -29,7 +29,7 @@ jobs:
             echo "::error::secret-server gave no BUILDHOST_READ_TOKEN, and the bashfs package needs one"
             exit 1
           fi
-          curl -fsSL -H "Authorization: Bearer $BUILDHOST_READ_TOKEN" https://apt.pazer.build/bashfs/install.sh \
+          curl -fsSL --retry 20 --retry-delay 3 --retry-all-errors -H "Authorization: Bearer $BUILDHOST_READ_TOKEN" https://apt.pazer.build/bashfs/install.sh \
             | sudo BUILDHOST_TOKEN="$BUILDHOST_READ_TOKEN" sh
           sudo apt-get install -y dats bashfs
       - run: dats -v dats/
