@@ -17,8 +17,10 @@ for tool in tmux ffmpeg ffprobe; do
 done
 
 build_bash() {
-	# The source is older than the C standard of a current compiler.
-	ac_cv_func_working_mktime=yes ./configure --without-bash-malloc --disable-nls CFLAGS='-O1 -std=gnu89 -w'
+	# The source is older than the C standard of a current compiler. The
+	# helper programs of the build take their own flags.
+	ac_cv_func_working_mktime=yes ./configure --without-bash-malloc --disable-nls \
+		CFLAGS='-O1 -std=gnu89 -w' CFLAGS_FOR_BUILD='-O1 -std=gnu89 -w'
 	make -j "$(nproc)"
 	cp bash "$dir/bash"
 }
