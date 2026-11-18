@@ -269,7 +269,7 @@ tests:
 
 	- desc: a narrow window stacks the list above the preview
 	  timeout: 60s
-	  cmd: COLS=60 ROWS=30 bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:j end:2 w:0.5 shot:narrow
+	  cmd: COLS=60 ROWS=30 bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:j end:1 w:0.5 shot:narrow
 	  outputs:
 		stdout:
 			- "────────────────────────────────────────────────────────────"
