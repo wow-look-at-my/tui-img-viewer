@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # imgv - a terminal file browser. Its main job is image previews on a slow
-# link.
-# An older bash stops at each empty array under nounset.
+# link. An older bash stops at each empty array under nounset.
 if (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) )); then
 	set -o nounset
 fi
@@ -15,6 +14,7 @@ source <(bashfs_cat layout.bash)
 source <(bashfs_cat directory.bash)
 source <(bashfs_cat metadata.bash)
 source <(bashfs_cat radiance.bash)
+source <(bashfs_cat mov.bash)
 source <(bashfs_cat jobs.bash)
 source <(bashfs_cat graphics.bash)
 source <(bashfs_cat preview.bash)

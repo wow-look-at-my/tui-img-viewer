@@ -53,20 +53,28 @@ layout() {
 	return 0
 }
 
-# Computes the cells that the image covers: BOX_C x BOX_R at BOX_X, BOX_Y.
-# The image keeps its aspect ratio and sits in the center of the preview pane.
-box_compute() {
+# Sets CELLS_C x CELLS_R to the cells that an image of $1 x $2 pixels covers in
+# the preview pane. The image keeps its aspect ratio.
+box_cells() {
 	local pw=$(( P_W * CELL_W )) ph=$(( P_H * CELL_H ))
-	local scale=$(( pw * 1000 / IMG_W )) other=$(( ph * 1000 / IMG_H ))
+	local scale=$(( pw * 1000 / $1 )) other=$(( ph * 1000 / $2 ))
 	(( other < scale )) && scale=$other
 	(( scale > MAX_UPSCALE * 1000 )) && scale=$(( MAX_UPSCALE * 1000 ))
-	local dw=$(( IMG_W * scale / 1000 )) dh=$(( IMG_H * scale / 1000 ))
-	BOX_C=$(( (dw + CELL_W - 1) / CELL_W ))
-	BOX_R=$(( (dh + CELL_H - 1) / CELL_H ))
-	(( BOX_C < 1 )) && BOX_C=1
-	(( BOX_R < 1 )) && BOX_R=1
-	(( BOX_C > P_W )) && BOX_C=$P_W
-	(( BOX_R > P_H )) && BOX_R=$P_H
+	local dw=$(( $1 * scale / 1000 )) dh=$(( $2 * scale / 1000 ))
+	CELLS_C=$(( (dw + CELL_W - 1) / CELL_W ))
+	CELLS_R=$(( (dh + CELL_H - 1) / CELL_H ))
+	(( CELLS_C < 1 )) && CELLS_C=1
+	(( CELLS_R < 1 )) && CELLS_R=1
+	(( CELLS_C > P_W )) && CELLS_C=$P_W
+	(( CELLS_R > P_H )) && CELLS_R=$P_H
+	return 0
+}
+
+# Computes the cells that the image covers: BOX_C x BOX_R at BOX_X, BOX_Y.
+# The image sits in the center of the preview pane.
+box_compute() {
+	box_cells "$IMG_W" "$IMG_H"
+	BOX_C=$CELLS_C BOX_R=$CELLS_R
 	BOX_X=$(( P_X + (P_W - BOX_C) / 2 ))
 	BOX_Y=$(( P_Y + (P_H - BOX_R) / 2 ))
 }

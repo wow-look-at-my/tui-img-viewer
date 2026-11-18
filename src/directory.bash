@@ -162,6 +162,8 @@ select_index() {
 	(( i >= N )) && i=$(( N - 1 ))
 	(( i < 0 )) && i=0
 	(( i == CUR )) && return 0
+	MOVE_DIR=1
+	(( i < CUR )) && MOVE_DIR=-1
 	CUR=$i
 	if scroll_fix; then
 		D_LIST=1

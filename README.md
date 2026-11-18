@@ -48,7 +48,7 @@ Press `?` in the program for the keys.
 - bash 3.2 or later, `stty`, and the file tools of a GNU, a BSD or a busybox system. Ubuntu 22.04 has all of them. A NAS with busybox and an old bash has them too.
 - A clock. A current bash has its own. An older bash reads the clock of Linux in `/proc/uptime`. macOS has no such file, so install bash 5 there with Homebrew.
 - A terminal with the kitty graphics protocol: Ghostty or kitty. tmux is supported and is the main case.
-- `ffmpeg` on the remote host, to decode and shrink images. Without it, only PNG files have a preview.
+- `ffmpeg` on the remote host, to decode and shrink images. Without it, only PNG files have a preview. A small ffmpeg build with no `image2` format also works: PNG files go through the `mov` format. The preview names any decoder that the build lacks.
 - `file` is optional. It names the type of a file that is not an image.
 
 Over ssh, Ubuntu 22.04 does not know the terminal name of Ghostty, and tmux stops with `missing or unsuitable terminal: xterm-ghostty`. This is a tmux matter, not one of `imgv`. Copy the entry to the remote host one time, or connect with a name it knows:
@@ -78,6 +78,9 @@ Bright areas of an EXR or HDR picture clip at white. The decoder for `.hdr` is s
 - The image goes out in small windows. After each window the terminal answers a short question, so the program knows what the link can carry and adapts the window size.
 - A key press stops a transfer at once. A small draft arrives first, and the full preview replaces it when you stay on the file.
 - `+` and `-` change the preview quality, which is the number of bytes on the link.
+- A finished image stays in the terminal. When you return to it, it shows at once, with no new transfer.
+- While the selection rests, the images next to it load ahead. `--no-preload` turns this off.
+- `f` changes the scaling from smooth to nearest, which keeps the pixels of a small image sharp. `--filter nearest` starts with it.
 - A terminal that answers nothing gets a fixed send rate (`--rate`). The program then watches the byte counters of tmux. When tmux dropped part of an image, the image goes out again at half the rate.
 
 In tmux, the program turns on `allow-passthrough` for its own pane and restores it on exit. The tmux client must be in UTF-8 mode: use a UTF-8 locale or attach with `tmux -u`. The program says so when it is not.
@@ -99,6 +102,8 @@ The same tests run a second time with bash 3.2 and the tools of busybox. The fir
 dats/lib/busybox-env.sh .busybox-env
 IMGV_SH=$PWD/.busybox-env/bash IMGV_PATH=$PWD/.busybox-env/bin dats dats/
 ```
+
+`dats/ffmpeg-min.dats` runs `imgv` with a small ffmpeg build, like the one of an embedded system. Its setup builds that ffmpeg in `.ffmpeg-min` the first time.
 
 ## License
 

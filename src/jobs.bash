@@ -1,15 +1,45 @@
 # Background preview jobs. One job reads one file and writes its results into
 # its own directory.
 
-# Starts a job in the background. Sets JOB_PID. A subshell starts the job and
-# ends at once, so the job is not a child of this shell.
+# Starts a job in the background. Sets REPLY to its process id. A subshell
+# starts the job and ends at once, so the job is not a child of this shell.
 job_spawn() {
 	local dir=$3
 	(
 		job_main "$@" </dev/null >/dev/null 2>&1 &
 		echo "$!" > "$dir/pid"
 	)
-	read -r JOB_PID < "$dir/pid" || JOB_PID=0
+	read -r REPLY < "$dir/pid" || REPLY=0
+}
+
+# Finds what the installed ffmpeg can read and write. A small build can have
+# no image2 formats and only a few decoders. Sets FF_HAS to words such as
+# "dx:image2", "mx:mov", "dec:png" and "enc:png", and FF_OUT to the format of
+# the preview files: image2, mov. It empty when ffmpeg cannot write PNG files.
+ff_caps() {
+	local kind flag list names name
+	FF_HAS=' ' FF_OUT=
+	for kind in dx:demuxers mx:muxers dec:decoders enc:encoders; do
+		list=$(ffmpeg -hide_banner "-${kind#*:}" 2>/dev/null) || list=
+		while read -r flag names _; do
+			[[ $flag == [A-Z.]* && -n ${names-} ]] || continue
+			# shellcheck disable=SC2086 # the split makes one word of each name
+			for name in ${names//,/ }; do
+				FF_HAS+="${kind%%:*}:$name "
+			done
+		done <<< "$list"
+	done
+	ff_has enc png || return 0
+	if ff_has mx image2; then
+		FF_OUT=image2
+	elif ff_has mx mov; then
+		FF_OUT=mov
+	fi
+}
+
+# Succeeds when ffmpeg has the part $2 of the kind $1: dx, mx, dec or enc.
+ff_has() {
+	[[ $FF_HAS == *" $1:$2 "* ]]
 }
 
 job_main() {
@@ -190,35 +220,71 @@ job_image() {
 		job_meta_lines "$w" "$h"
 	fi
 	job_stat_lines "$path"
-	job_write info "${INFO[@]}"
 	if (( w < 1 || h < 1 )); then
+		job_write info "${INFO[@]}"
 		job_write err 'this image format is not recognized'
 		return
 	fi
-	(( max_w > 0 )) || return 0
+	if (( max_w < 1 )); then
+		job_write info "${INFO[@]}"
+		return
+	fi
 
-	# A PNG file that is small enough needs no decoder.
-	local direct=0
+	# why names what this ffmpeg lacks for the file.
+	local dec='' why=''
+	case $format in
+		PNG) dec=png ;;
+		JPEG) dec=mjpeg ;;
+		GIF) dec=gif ;;
+		BMP) dec=bmp ;;
+		WebP) dec=webp ;;
+		TIFF) dec=tiff ;;
+		EXR) dec=exr ;;
+	esac
+	if (( ! HAVE_FFMPEG )); then
+		why='ffmpeg is not installed'
+	elif [[ -z $FF_OUT ]]; then
+		why='this ffmpeg cannot write PNG files'
+	elif [[ -n $dec ]] && ! ff_has dec "$dec"; then
+		why="this ffmpeg has no $dec decoder"
+	elif [[ -n $dec ]] && ! ff_has dx image2 && ! ff_has dx "${dec}_pipe" && ! ff_has dx "$dec" &&
+		! { [[ $format == PNG ]] && ff_has dx mov; }; then
+		why="this ffmpeg cannot read $format files"
+	fi
+
+	# Nearest scaling enlarges a small picture to the cells that it covers, so the terminal does not smooth it.
+	local direct=0 up=0 flt=lanczos draft=bilinear
+	box_cells "$w" "$h"
+	if [[ $FILTER == nearest ]]; then
+		flt=neighbor draft=neighbor
+		(( CELLS_C * CELL_W > w )) && up=1
+	fi
 	if [[ $format == PNG ]] && (( orient == 1 )); then
-		(( w <= max_w && h <= max_h && fsize <= DIRECT_PNG_MAX )) && direct=1
-		(( HAVE_FFMPEG )) || direct=1
+		(( w <= max_w && h <= max_h && fsize <= DIRECT_PNG_MAX && ! up )) && direct=1
+		[[ -n $why ]] && direct=1
 	fi
 	if (( direct )); then
+		[[ -n $why ]] && INFO+=("Note"$'\t'"sent as is: $why")
+		job_write info "${INFO[@]}"
 		job_write geom "$w $h 1"
 		job_stage 1 "$path" "$w" "$h" || job_write err 'cannot read the file'
 		return
 	fi
-	if (( ! HAVE_FFMPEG )); then
-		job_write err 'ffmpeg is not installed: only PNG files have a preview'
+	job_write info "${INFO[@]}"
+	if [[ -n $why ]]; then
+		job_write err "$why"
 		return
 	fi
 
 	fit_px "$w" "$h" "$max_w" "$max_h"
 	local out_w=$FIT_W out_h=$FIT_H
+	if (( up && out_w == w && out_h == h )); then
+		out_w=$(( CELLS_C * CELL_W )) out_h=$(( CELLS_R * CELL_H ))
+	fi
 	fit_px "$w" "$h" "$THUMB_EDGE" "$THUMB_EDGE"
 	local thumb_w=$FIT_W thumb_h=$FIT_H stages=1
-	# A draft stage is useful only when the last stage is larger.
-	(( out_w * 2 > thumb_w * 3 )) && stages=2
+	# A draft stage is useful only when the last stage holds more detail.
+	(( ! up && out_w * 2 > thumb_w * 3 )) && stages=2
 	job_write geom "$w $h $stages"
 
 	local turn=
@@ -234,6 +300,13 @@ job_image() {
 	# ffmpeg reads the file through a link, so no file name can look like an option or a sequence pattern.
 	ln -s -- "$path" "$JOB_OUT/src"
 	local -a input=(-noautorotate -i "$JOB_OUT/src")
+	if [[ $format == PNG ]] && ! ff_has dx image2 && ! ff_has dx png_pipe; then
+		if ! mov_wrap "$path" "$META_width" "$META_height" "$JOB_OUT/src.mov"; then
+			job_write err 'cannot read the file'
+			return
+		fi
+		input=(-noautorotate -f mov -i "$JOB_OUT/src.mov")
+	fi
 	# The filter that puts the sRGB curve on a picture that holds linear light.
 	local curve='if(lte(val/maxval,0.0031308),12.92*val,(1.055*pow(val/maxval,1/2.4)-0.055)*maxval)'
 	local srgb="lutrgb=r='$curve':g='$curve':b='$curve',"
@@ -250,10 +323,13 @@ job_image() {
 			fi
 			;;
 		HDR)
-			if [[ ${META_scan_order-} == '-Y +X' && $(ffmpeg -hide_banner -decoders 2>/dev/null) == *' hdr '* ]]; then
+			if [[ ${META_scan_order-} == '-Y +X' ]] && ff_has dec hdr && { ff_has dx image2 || ff_has dx hdr_pipe; }; then
 				# This ffmpeg reads the format. Its output is linear light, so the sRGB curve follows here.
 				input=(-i "$JOB_OUT/src")
 				turn="format=gbrp16le,$srgb"
+			elif ! ff_has dx rawvideo; then
+				job_write err 'this ffmpeg cannot read Radiance files: it has no hdr decoder and no rawvideo demuxer'
+				return
 			elif job_radiance "$path" "$w" "$h" "$out_w" "$out_h"; then
 				input=(-f rawvideo -pixel_format "$RAD_FORMAT" -video_size "${w}x$RAD_ROWS" -i "$JOB_OUT/planes")
 				turn=$RAD_FILTER
@@ -265,14 +341,19 @@ job_image() {
 	esac
 	local pix='format=pix_fmts=rgb24|rgba|gray|ya8' graph
 	local -a enc=(-frames:v 1 -c:v png -pred mixed -f image2 -update 1) outs
+	local ext=png n
+	if [[ $FF_OUT == mov ]]; then
+		enc=(-frames:v 1 -c:v png -pred mixed -f mov)
+		ext=mov
+	fi
 	if (( stages == 2 )); then
 		graph="[0:v]${turn}split=2[a][b];"
-		graph+="[a]scale=${thumb_w}:${thumb_h}:flags=bilinear,${pix}[t];"
-		graph+="[b]scale=${out_w}:${out_h}:flags=lanczos,${pix}[f]"
-		outs=(-map '[t]' "${enc[@]}" "$JOB_OUT/1.png" -map '[f]' "${enc[@]}" "$JOB_OUT/2.png")
+		graph+="[a]scale=${thumb_w}:${thumb_h}:flags=${draft},${pix}[t];"
+		graph+="[b]scale=${out_w}:${out_h}:flags=${flt},${pix}[f]"
+		outs=(-map '[t]' "${enc[@]}" "$JOB_OUT/1.$ext" -map '[f]' "${enc[@]}" "$JOB_OUT/2.$ext")
 	else
-		graph="[0:v]${turn}scale=${out_w}:${out_h}:flags=lanczos,${pix}[f]"
-		outs=(-map '[f]' "${enc[@]}" "$JOB_OUT/1.png")
+		graph="[0:v]${turn}scale=${out_w}:${out_h}:flags=${flt},${pix}[f]"
+		outs=(-map '[f]' "${enc[@]}" "$JOB_OUT/1.$ext")
 	fi
 	if ! job_run ffmpeg -nostdin -y -v error "${input[@]}" \
 		-filter_complex "$graph" "${outs[@]}" 2> "$JOB_OUT/log"; then
@@ -280,6 +361,14 @@ job_image() {
 		[[ -s $JOB_OUT/log ]] && reason=$(tail -n 1 -- "$JOB_OUT/log")
 		job_write err "ffmpeg cannot decode this file: ${reason:-no message}"
 		return
+	fi
+	if [[ $ext == mov ]]; then
+		for (( n = 1; n <= stages; n++ )); do
+			if ! mov_extract "$JOB_OUT/$n.mov" "$JOB_OUT/$n.png"; then
+				job_write err 'cannot read the preview that ffmpeg wrote'
+				return
+			fi
+		done
 	fi
 	if (( stages == 2 )); then
 		job_stage 1 "$JOB_OUT/1.png" "$thumb_w" "$thumb_h" &&

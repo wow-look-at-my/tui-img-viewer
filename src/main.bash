@@ -7,9 +7,12 @@ $PROG $VERSION - terminal file browser with image previews
 Usage: $PROG [options] [directory | file]
 
 Options:
-  -a, --all            show hidden files
+  -a, --all            show dotfiles (the default)
+  -H, --hide-dotfiles  start with dotfiles hidden
   -n, --no-images      start with image previews off
   -q, --quality LEVEL  preview quality: draft, normal, fine, full (default: normal)
+  -f, --filter MODE    scaling: smooth or nearest (default: smooth)
+      --no-preload     load only the selected image, not the images near it
       --rate KIB       send rate in KiB/s when the terminal gives no answers (default: 128)
   -h, --help           show this text
   -V, --version        show the version
@@ -27,6 +30,14 @@ parse_args() {
 		shift
 		case $arg in
 			-a | --all) SHOW_HIDDEN=1 ;;
+			-H | --hide-dotfiles) SHOW_HIDDEN=0 ;;
+			--no-preload) PRELOAD=0 ;;
+			-f | --filter)
+				(( $# )) || die "$arg needs a value"
+				[[ $1 == smooth || $1 == nearest ]] || die "unknown filter: $1 (use smooth or nearest)"
+				FILTER=$1
+				shift
+				;;
 			-n | --no-images) GFX=off ;;
 			-q | --quality)
 				(( $# )) || die "$arg needs a value"
@@ -71,10 +82,16 @@ cleanup() {
 	trap - EXIT
 	if (( TERM_READY )); then
 		tx_abort
-		printf '%s' "${GFX_PRE}q=2,a=d,d=I,i=${ID_A}${GFX_SUF}${GFX_PRE}q=2,a=d,d=I,i=${ID_B}${GFX_SUF}"
+		# Every image of this program leaves the terminal.
+		local id out=
+		for id in "${RES_ID[@]}" $SHOWN_ID $OLD_IDS; do
+			(( id )) && out+="${GFX_PRE}q=2,a=d,d=I,i=${id}${GFX_SUF}"
+		done
+		printf '%s' "$out"
 		term_restore
 	fi
 	job_kill
+	pf_stop
 	tmux_restore
 	[[ -n $RUN_DIR ]] && rm -rf -- "$RUN_DIR"
 	return 0
@@ -110,7 +127,16 @@ probe_host() {
 	# GNU and busybox date take the time after "-d @", BSD date after "-r".
 	date -d @0 +%s >/dev/null 2>&1 || DATE_OPT=-r DATE_PRE=''
 
-	command -v ffmpeg >/dev/null && HAVE_FFMPEG=1
+	if command -v ffmpeg >/dev/null; then
+		ff_caps
+		if [[ -n $FF_OUT ]]; then
+			HAVE_FFMPEG=1
+		elif [[ $GFX != off ]]; then
+			status 'this ffmpeg cannot write PNG files: only PNG files have a preview'
+		fi
+	elif [[ $GFX != off ]]; then
+		status 'ffmpeg is not installed: only PNG files have a preview'
+	fi
 	command -v ffprobe >/dev/null && HAVE_FFPROBE=1
 	command -v file >/dev/null && HAVE_FILE=1
 	# GNU and busybox stat take the format after -c, BSD stat after -f.
@@ -175,7 +201,6 @@ main() {
 	scroll_fix
 	now_ms
 	[[ $GFX == off ]] || handshake_send
-	(( HAVE_FFMPEG )) || [[ $GFX == off ]] || status 'ffmpeg is not installed: only PNG files have a preview'
 	if (( IN_TMUX )) && [[ $GFX != off ]] && ! tmux_utf8; then
 		GFX=noutf8
 		status 'tmux is not in UTF-8 mode, so images cannot show: attach with "tmux -u"'
