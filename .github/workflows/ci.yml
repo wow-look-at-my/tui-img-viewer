@@ -50,7 +50,7 @@ jobs:
       deployments: write
     steps:
       - uses: actions/checkout@v4
-      # imgv is one bash script, so the same file fills every os/arch slot of the buildhost project imgv.
+      # imgv is one bash script, so the same file fills every os/arch slot. A repo publishes only in its own namespace, so the project is <repo>/imgv.
       - run: |
           mkdir dist
           for os in linux darwin; do
@@ -60,6 +60,5 @@ jobs:
           done
       - uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish@lkgb
         with:
-          project: imgv
           path: dist
           default_branch: ${{ github.event.repository.default_branch }}
