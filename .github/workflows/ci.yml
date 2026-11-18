@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: wow-look-at-my/actions@bubblewrap#latest
       # Not cached-apt: ffmpeg loads a library that apt sets up as an alternative, and a cache restore does not make that link.
-      - run: sudo apt-get update && sudo apt-get install -y tmux ffmpeg shellcheck busybox-static gcc make bison
+      - run: sudo apt-get update && sudo apt-get install -y tmux ffmpeg shellcheck busybox-static gcc make bison zlib1g-dev
       - uses: wow-look-at-my/actions@secret-server#latest
       # bashfs is a private package. The authenticated apt source lists it and dats.
       - name: Install dats and bashfs
@@ -32,6 +32,11 @@ jobs:
           curl -fsSL -H "Authorization: Bearer $BUILDHOST_READ_TOKEN" https://apt.pazer.build/bashfs/install.sh \
             | sudo BUILDHOST_TOKEN="$BUILDHOST_READ_TOKEN" sh
           sudo apt-get install -y dats bashfs
+      # dats/ffmpeg-min.dats runs imgv with an ffmpeg that has few formats. The hash puts a change of the build script into the cache key.
+      - uses: wow-look-at-my/actions@cached-run#latest
+        with:
+          run: bash dats/lib/ffmpeg-min.sh .ffmpeg-min # ${{ hashFiles('dats/lib/ffmpeg-min.sh', 'dats/lib/build-source.sh') }}
+          paths: .ffmpeg-min
       - run: dats -v dats/
       # The second run uses the oldest bash that imgv supports and the tools of busybox.
       - run: bash dats/lib/busybox-env.sh .busybox-env

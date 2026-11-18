@@ -39,6 +39,7 @@ draw_footer() {
 		left='j/k move  h/l dir  z zoom  +/- quality  / search  ? help  q quit'
 	fi
 	right="$(( N ? CUR + 1 : 0 ))/$N  $SORT  ${QUALITY_NAME[QUALITY]}"
+	[[ $FILTER == nearest ]] && right+='  nearest'
 	if (( LINK_BPS )); then
 		human_size "$LINK_BPS"
 		right+="  $REPLY/s"
@@ -182,10 +183,12 @@ draw_preview() {
 			fi
 			;;
 	esac
-	if (( OLD_ID )); then
-		gfx_cmd "q=2,a=d,d=I,i=$OLD_ID"
-		OLD_ID=0
-	fi
+	# An image that the new one replaced leaves the terminal, unless it is kept.
+	local id
+	for id in $OLD_IDS; do
+		(( id == SHOWN_ID )) || res_has_id "$id" || gfx_cmd "q=2,a=d,d=I,i=$id"
+	done
+	OLD_IDS=
 }
 
 draw_help() {
@@ -198,6 +201,7 @@ draw_help() {
 		'~               home directory'
 		'z  Tab          zoom: the preview fills the window'
 		'+ -             preview quality (draft, normal, fine, full)'
+		'f               scaling: smooth or nearest (sharp pixels)'
 		'i               image previews on or off'
 		'/  n N          search, next match, previous match'
 		's               sort by name, time, size'

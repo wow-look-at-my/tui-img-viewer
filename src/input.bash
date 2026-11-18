@@ -214,6 +214,16 @@ quality_step() {
 	preview_restart
 }
 
+filter_toggle() {
+	if [[ $FILTER == smooth ]]; then
+		FILTER=nearest
+	else
+		FILTER=smooth
+	fi
+	status "scaling: $FILTER"
+	preview_restart
+}
+
 images_toggle() {
 	case $GFX in
 		on)
@@ -280,6 +290,7 @@ handle_key() {
 		+ | =) quality_step 1 ;;
 		- | _) quality_step -1 ;;
 		i) images_toggle ;;
+		f) filter_toggle ;;
 		.)
 			SHOW_HIDDEN=$(( ! SHOW_HIDDEN ))
 			dir_reload

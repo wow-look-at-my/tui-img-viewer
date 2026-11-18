@@ -37,6 +37,13 @@ tests:
 		stderr:
 			- "imgv: unknown quality: nope"
 
+	- desc: an unknown filter is an error
+	  cmd: dats/lib/run.sh ./imgv --filter blurry
+	  exit: 1
+	  outputs:
+		stderr:
+			- "imgv: unknown filter: blurry (use smooth or nearest)"
+
 	- desc: a rate of zero is an error
 	  cmd: dats/lib/run.sh ./imgv --rate 0
 	  exit: 1
@@ -65,7 +72,7 @@ tests:
 	  cmd: grep -c '^# bashfs. begin ' imgv; grep -c 'bashfs_' imgv; grep -c 'base64 -d' imgv; true
 	  outputs:
 		stdout:
-			0: '^13$'
+			0: '^14$'
 			1: '^0$'
 			2: '^0$'
 
@@ -73,4 +80,4 @@ tests:
 	  cmd: shellcheck --norc -s bash imgv
 
 	- desc: shellcheck finds nothing in the build and test scripts
-	  cmd: shellcheck -s bash build.sh dats/lib/drive.sh dats/lib/fake-term.sh dats/lib/run.sh dats/lib/busybox-env.sh dats/fixtures/make-browse-fixtures.sh
+	  cmd: shellcheck -s bash build.sh dats/lib/drive.sh dats/lib/fake-term.sh dats/lib/run.sh dats/lib/busybox-env.sh dats/lib/build-source.sh dats/lib/ffmpeg-min.sh dats/fixtures/make-browse-fixtures.sh
