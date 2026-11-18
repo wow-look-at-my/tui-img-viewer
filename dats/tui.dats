@@ -333,6 +333,15 @@ tests:
 			- "scaling: smooth or nearest"
 
 	# The image entries below the first one loads while the selection rests.
+	- desc: the help box stays whole while an image near the selection loads ahead
+	  timeout: 60s
+	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:0.3 'k:?' w:4 shot:help k:x w:0.5
+	  outputs:
+		stdout:
+			- "q               quit"
+			- "press a key to close"
+			- "image 1: 586x440 complete"
+
 	- desc: an image near the selection loads ahead and shows at once with no new transfer
 	  timeout: 60s
 	  cmd: bash dats/lib/drive.sh dats/fixtures/browse w:5 k:jj w:0.5 shot:preloaded

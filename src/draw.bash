@@ -239,6 +239,13 @@ render() {
 		flush
 		return
 	fi
+	# The help box covers the panes, so they wait. Its close draws everything.
+	if [[ $MODE == help ]] && (( ! D_ALL )); then
+		D_HEADER=0 D_LIST=0 D_DETAILS=0 D_PREVIEW=0 D_FOOTER=0
+		DIRTY_ROWS=()
+		flush
+		return
+	fi
 	if (( D_ALL )); then
 		FRAME+=$'\e[0m\e[2J'
 		PV_PAINTED=
