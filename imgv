@@ -3259,8 +3259,6 @@ main() {
 	dir_find "$start_name"
 	CUR=$REPLY
 	scroll_fix
-	now_ms
-	[[ $GFX == off ]] || handshake_send
 	(( HAVE_FFMPEG )) || [[ $GFX == off ]] || status 'ffmpeg is not installed: only PNG files have a preview'
 	if (( IN_TMUX )) && [[ $GFX != off ]] && ! tmux_utf8; then
 		GFX=noutf8
@@ -3268,6 +3266,9 @@ main() {
 	fi
 	preview_reset
 	render
+	# The handshake time is the first round trip of the link.
+	now_ms
+	[[ $GFX == off ]] || handshake_send
 
 	while (( RUNNING )); do
 		preview_timeout
