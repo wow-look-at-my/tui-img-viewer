@@ -23,12 +23,12 @@ A terminal file browser whose main job is image previews. It is one bash script,
 CI publishes `imgv` to buildhost from `master`. With Homebrew:
 
 ```bash
+brew trust https://brew.pazer.build/tap.git
+brew tap pazer/build https://brew.pazer.build/tap.git
 brew install pazer/build/tui-img-viewer
 ```
 
 The formula takes the name of the repository and puts `imgv` on the `PATH`.
-
-The repository is private. The buildhost project is private too. Tap the authenticated tap with a read token first, as the buildhost docs describe.
 
 Or copy the file `imgv` to the remote host and make it executable. Nothing else is needed.
 
