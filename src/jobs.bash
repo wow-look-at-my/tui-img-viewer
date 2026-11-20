@@ -37,10 +37,10 @@ ff_caps() {
 	fi
 }
 
-# Some hosts let ffmpeg open no file in the work directory, not even as root: a
-# sandbox can keep it out. ffmpeg then reads and writes pipes that cat feeds
-# and empties. Sets FF_PIPE to `FF_PIPE` and FF_PIPE_OUT to the muxer for the
-# pipe. The file protocol opens a pipe through /proc when the build has no pipe protocol.
+# A sandbox can keep ffmpeg out of the work directory, even for root. ffmpeg
+# then reads and writes pipes that cat feeds and empties: FF_PIPE turns this on
+# and FF_PIPE_OUT names the muxer. Without a pipe protocol, ffmpeg opens the
+# pipe through /proc. FF_WHY says why ffmpeg makes no previews at all.
 ff_check_dir() {
 	local probe=$RUN_DIR/probe out
 	printf 'imgv' > "$probe" || return 0
@@ -51,12 +51,18 @@ ff_check_dir() {
 	if [[ $(ffmpeg -hide_banner -protocols 2>/dev/null) == *[[:space:]]pipe[[:space:]]* ]]; then
 		FF_IN=pipe:0 FF_OUTPUT=pipe:1
 	fi
-	if ff_has mx image2pipe; then
+	out=$(printf 'imgv' | ffmpeg -nostdin -hide_banner -v error -i "$FF_IN" 2>&1)
+	if [[ $out == *'Permission denied'* || $out == *'Operation not permitted'* ]]; then
+		FF_WHY="ffmpeg may open neither the files in $RUN_DIR nor a pipe through $FF_IN"
+	elif ff_has mx image2pipe; then
 		FF_PIPE_OUT=image2pipe
 	elif ff_has mx mov; then
 		FF_PIPE_OUT=mov
 	else
-		status "ffmpeg may not open the files in $RUN_DIR, and it has no muxer for a pipe: only PNG files have a preview"
+		FF_WHY="ffmpeg may not open the files in $RUN_DIR, and it has no muxer for a pipe"
+	fi
+	if [[ -n $FF_WHY ]]; then
+		status "$FF_WHY: only PNG files have a preview"
 		return 0
 	fi
 	status "ffmpeg may not open the files in $RUN_DIR: previews go through pipes, with no draft stage"
@@ -286,8 +292,8 @@ job_image() {
 		why='ffmpeg is not installed'
 	elif [[ -z $FF_OUT ]]; then
 		why='this ffmpeg cannot write PNG files'
-	elif (( FF_PIPE )) && [[ -z $FF_PIPE_OUT ]]; then
-		why='ffmpeg may not open the work files, and it has no muxer for a pipe'
+	elif [[ -n $FF_WHY ]]; then
+		why=$FF_WHY
 	elif [[ -n $dec ]] && ! ff_has dec "$dec"; then
 		why="this ffmpeg has no $dec decoder"
 	elif [[ $format == PNG ]] && ff_has dx mov; then

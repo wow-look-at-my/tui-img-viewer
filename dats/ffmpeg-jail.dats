@@ -55,3 +55,13 @@ tests:
 		stdout:
 			- "Name     small.png"
 			- "last image: 586x440 complete"
+
+	- desc: a sandbox that also blocks the pipe is named, and a PNG file goes as it is
+	  timeout: 60s
+	  cmd: JAIL_PIPES=1 IMGV_PATH=$PWD/dats/lib/ffmpeg-jail:${IMGV_PATH:-$PATH} IMGV_ARGS=--no-preload bash dats/lib/drive.sh dats/fixtures/browse w:1 k:/ k:big $'k:\r' w:2 shot:jpeg k:/ k:small $'k:\r' w:2 shot:png
+	  outputs:
+		stdout:
+			- "ffmpeg may open neither the files in "
+			- "Preview  failed"
+			- "Note     sent as is: ffmpeg may open neither"
+			- "image 1: 640x480 complete"

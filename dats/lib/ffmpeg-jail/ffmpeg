@@ -4,9 +4,10 @@
 # root. Other calls go to the next ffmpeg on the PATH. POSIX sh, because the
 # busybox test PATH has no bash.
 here=$(cd "${0%/*}" && pwd)
+# JAIL_PIPES=1 keeps it out of the pipes too.
 for arg; do
-	case $arg in
-		"${TMPDIR:-/tmp}"/imgv.*)
+	case ${JAIL_PIPES-}:$arg in
+		*:"${TMPDIR:-/tmp}"/imgv.* | 1:/proc/* | 1:pipe:*)
 			echo "Error opening input files: Permission denied" >&2
 			exit 1
 			;;

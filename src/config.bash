@@ -55,7 +55,7 @@ state_init() {
 	FRAME=
 	STATUS='' STATUS_AT=0
 	RUN_DIR='' TERM_READY=0 STTY_SAVED='' TMUX_RESTORE=0 IN_TMUX=0
-	HAVE_FFMPEG=0 HAVE_FFPROBE=0 HAVE_FILE=0 FF_HAS=' ' FF_OUT='' FF_PIPE=0 FF_PIPE_OUT='' FF_IN='' FF_OUTPUT=''
+	HAVE_FFMPEG=0 HAVE_FFPROBE=0 HAVE_FILE=0 FF_HAS=' ' FF_OUT='' FF_PIPE=0 FF_PIPE_OUT='' FF_IN='' FF_OUTPUT='' FF_WHY=''
 	# The stat options that print the size and time of an entry, and its mode and owner.
 	STAT_LIST=() STAT_MODE=()
 	# What this bash and the tools of this host can do.
