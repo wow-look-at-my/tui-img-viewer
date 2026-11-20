@@ -25,6 +25,18 @@ tests:
 			- "image 1: 260x260 complete"
 			- "images: 1"
 
+	- desc: with a sandbox, a PNG file goes as a mov file through pipes that ffmpeg opens in /proc
+	  timeout: 60s
+	  cmd: IMGV_PATH=$PWD/dats/lib/ffmpeg-jail:$PWD/.ffmpeg-min/bin:${IMGV_PATH:-$PATH} IMGV_ARGS=--no-preload bash dats/lib/drive.sh dats/fixtures/browse w:1 k:/ k:small $'k:\r' w:4 shot:png
+	  outputs:
+		stdout:
+			- "Preview  normal 586×440"
+			- "image 1: 586x440 complete"
+			- "images: 1"
+		!stdout:
+			- "Permission denied"
+			- "Preview  failed"
+
 	- desc: a JPEG file says that this ffmpeg has no decoder for it
 	  timeout: 60s
 	  cmd: IMGV_PATH=$PWD/.ffmpeg-min/bin:${IMGV_PATH:-$PATH} IMGV_ARGS=--no-preload bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:jj w:2 shot:jpeg

@@ -271,8 +271,7 @@ job_image() {
 		return
 	fi
 
-	# why names what this ffmpeg lacks for the file.
-	# pd is the demuxer that reads the format from a pipe.
+	# why names what this ffmpeg lacks for the file. pd is the demuxer that reads the format from a pipe.
 	local dec='' pd='' why=''
 	case $format in
 		PNG) dec=png pd=png_pipe ;;
@@ -293,7 +292,7 @@ job_image() {
 		why="this ffmpeg has no $dec decoder"
 	elif [[ $format == PNG ]] && ff_has dx mov; then
 		:
-	elif (( FF_PIPE )) && [[ -n $pd ]] && ! ff_has dx "$pd"; then
+	elif (( FF_PIPE )) && [[ -n $dec ]] && ! ff_has dx "$pd"; then
 		why="this ffmpeg cannot read $format files from a pipe: it has no $pd demuxer"
 	elif [[ -n $dec ]] && ! ff_has dx image2 && ! ff_has dx "$pd" && ! ff_has dx "${dec}_pipe" && ! ff_has dx "$dec"; then
 		why="this ffmpeg cannot read $format files"
@@ -344,15 +343,18 @@ job_image() {
 		7) turn=transpose=3, ;;
 		8) turn=transpose=2, ;;
 	esac
-	# ffmpeg reads the file feed under the name src. A link keeps a file name from looking like an option or a sequence pattern.
+	# ffmpeg reads feed under the name src: a link, so no name looks like an option or a sequence pattern.
 	local feed=$path src=$JOB_OUT/src
+	[[ $format == HDR ]] && pd=hdr_pipe
+	local -a inp=(-i "$src")
 	if (( FF_PIPE )); then
-		src=$FF_IN
+		src=$FF_IN inp=(-i "$FF_IN")
+		[[ $pd == *_pipe ]] && inp=(-f "$pd" -frame_size "$fsize" -i "$FF_IN")
 	elif ! ln -s -- "$path" "$src"; then
 		job_write err "cannot make a link in $JOB_OUT"
 		return
 	fi
-	local -a input=(-noautorotate -i "$src")
+	local -a input=(-noautorotate "${inp[@]}")
 	if [[ $format == PNG ]] && ! ff_has dx png_pipe && { (( FF_PIPE )) || ! ff_has dx image2; }; then
 		feed=$JOB_OUT/src.mov
 		if ! mov_wrap "$path" "$META_width" "$META_height" "$feed"; then
@@ -367,10 +369,10 @@ job_image() {
 	local srgb="lutrgb=r='$curve':g='$curve':b='$curve',"
 	case $format in
 		EXR)
-			input=(-i "$src")
+			input=("${inp[@]}")
 			if [[ $(ffmpeg -hide_banner -h decoder=exr 2>/dev/null) == *apply_trc* ]]; then
 				# This decoder applies the curve.
-				input=(-apply_trc iec61966_2_1 -i "$src")
+				input=(-apply_trc iec61966_2_1 "${inp[@]}")
 			elif [[ ${META_color-} == @(RGBA|Gray+Alpha) ]]; then
 				turn="format=gbrap16le,$srgb"
 			else
@@ -380,7 +382,7 @@ job_image() {
 		HDR)
 			if [[ ${META_scan_order-} == '-Y +X' ]] && ff_has dec hdr && { ff_has dx hdr_pipe || { (( ! FF_PIPE )) && ff_has dx image2; }; }; then
 				# This ffmpeg reads the format. Its output is linear light, so the sRGB curve follows here.
-				input=(-i "$src")
+				input=("${inp[@]}")
 				turn="format=gbrp16le,$srgb"
 			elif ! ff_has dx rawvideo; then
 				job_write err 'this ffmpeg cannot read Radiance files: it has no hdr decoder and no rawvideo demuxer'

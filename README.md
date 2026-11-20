@@ -58,7 +58,7 @@ Press `?` in the program for the keys.
 - bash 3.2 or later, `stty`, and the file tools of a GNU, a BSD or a busybox system. Ubuntu 22.04 has all of them. A NAS with busybox and an old bash has them too.
 - A clock. A current bash has its own. An older bash reads the clock of Linux in `/proc/uptime`. macOS has no such file, so install bash 5 there with Homebrew.
 - A terminal with the kitty graphics protocol: Ghostty or kitty. tmux is supported and is the main case.
-- `ffmpeg` on the remote host, to decode and shrink images. Without it, only PNG files have a preview. A small ffmpeg build with no `image2` format also works: PNG files go through the `mov` format. The preview names any decoder that the build lacks.
+- `ffmpeg` on the remote host, to decode and shrink images. Without it, only PNG files have a preview. A small ffmpeg build with no `image2` format also works: PNG files go through the `mov` format. The preview names any decoder that the build lacks. A sandbox can keep ffmpeg out of the work directory in `/tmp`, even for root. Then the data goes through pipes. The status line says so.
 - `file` is optional. It names the type of a file that is not an image.
 
 Over ssh, Ubuntu 22.04 does not know the terminal name of Ghostty, and tmux stops with `missing or unsuitable terminal: xterm-ghostty`. This is a tmux matter, not one of `imgv`. Copy the entry to the remote host one time, or connect with a name it knows:
