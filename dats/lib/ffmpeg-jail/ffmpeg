@@ -1,8 +1,9 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # Stands in for an ffmpeg that a sandbox keeps out of the work directory of
 # imgv: it fails on each path in that directory as the real one fails, even as
-# root. Other calls go to the next ffmpeg on the PATH.
-here=$(cd "${BASH_SOURCE%/*}" && pwd)
+# root. Other calls go to the next ffmpeg on the PATH. POSIX sh, because the
+# busybox test PATH has no bash.
+here=$(cd "${0%/*}" && pwd)
 for arg; do
 	case $arg in
 		"${TMPDIR:-/tmp}"/imgv.*)
@@ -11,5 +12,9 @@ for arg; do
 			;;
 	esac
 done
-PATH=${PATH//$here:/}
-exec ffmpeg "$@"
+IFS=:
+for dir in $PATH; do
+	[ "$dir" != "$here" ] && [ -x "$dir/ffmpeg" ] && exec "$dir/ffmpeg" "$@"
+done
+echo 'ffmpeg-jail: no ffmpeg behind this one on the PATH' >&2
+exit 127
