@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Stands in for an ffmpeg that a sandbox keeps out of the work directory of
+# imgv: it fails on each path in that directory as the real one fails, even as
+# root. Other calls go to the next ffmpeg on the PATH.
+here=$(cd "${BASH_SOURCE%/*}" && pwd)
+for arg; do
+	case $arg in
+		"${TMPDIR:-/tmp}"/imgv.*)
+			echo "Error opening input files: Permission denied" >&2
+			exit 1
+			;;
+	esac
+done
+PATH=${PATH//$here:/}
+exec ffmpeg "$@"
