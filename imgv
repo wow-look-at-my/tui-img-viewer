@@ -1967,7 +1967,10 @@ ff_check_dir() {
 	if [[ $(ffmpeg -hide_banner -protocols 2>/dev/null) == *[[:space:]]pipe[[:space:]]* ]]; then
 		FF_IN=pipe:0 FF_OUTPUT=pipe:1
 	fi
-	out=$(printf 'imgv' | ffmpeg -nostdin -hide_banner -v error -i "$FF_IN" 2>&1)
+	out=$(printf 'imgv' | {
+		ff_open_pipes
+		ffmpeg -nostdin -hide_banner -v error -i "$FF_IN" 2>&1
+	})
 	if [[ $out == *'Permission denied'* || $out == *'Operation not permitted'* ]]; then
 		FF_WHY="ffmpeg may open neither the files in $RUN_DIR nor a pipe through $FF_IN"
 	elif ff_has mx image2pipe; then
@@ -1982,6 +1985,13 @@ ff_check_dir() {
 		return 0
 	fi
 	status "ffmpeg may not open the files in $RUN_DIR: previews go through pipes, with no draft stage"
+}
+
+# A pipe belongs to its maker with a later mode. An ffmpeg that runs as
+# another user can open it through /proc only after this.
+ff_open_pipes() {
+	[[ $FF_IN == /proc/* ]] && chmod 0666 /proc/self/fd/0 /proc/self/fd/1 2>/dev/null
+	return 0
 }
 
 # Succeeds when ffmpeg has the part $2 of the kind $1: dx, mx, dec or enc.
@@ -2027,6 +2037,7 @@ job_pipe() {
 	local in=$1 out=$2 rc
 	shift 2
 	cat -- "$in" | {
+		ff_open_pipes
 		"$@" <&0 &
 		echo "$!" > "$JOB_OUT/pipe.pid"
 		wait "$!"

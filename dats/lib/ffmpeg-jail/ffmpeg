@@ -4,13 +4,16 @@
 # root. Other calls go to the next ffmpeg on the PATH. POSIX sh, because the
 # busybox test PATH has no bash.
 here=$(cd "${0%/*}" && pwd)
-# JAIL_PIPES=1 keeps it out of the pipes too.
+# JAIL_PIPES=1 keeps it out of the pipes too. JAIL_PIPES=user acts as an ffmpeg
+# that runs as another user: it opens a pipe in /proc only when all may read and write it.
+deny() {
+	echo "Error opening input files: Permission denied" >&2
+	exit 1
+}
 for arg; do
 	case ${JAIL_PIPES-}:$arg in
-		*:"${TMPDIR:-/tmp}"/imgv.* | 1:/proc/* | 1:pipe:*)
-			echo "Error opening input files: Permission denied" >&2
-			exit 1
-			;;
+		*:"${TMPDIR:-/tmp}"/imgv.* | 1:/proc/* | 1:pipe:*) deny ;;
+		user:/proc/self/fd/[01]) [ "$(stat -L -c %a "$arg")" = 666 ] || deny ;;
 	esac
 done
 IFS=:
