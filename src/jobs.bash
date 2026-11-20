@@ -37,6 +37,31 @@ ff_caps() {
 	fi
 }
 
+# Some hosts let ffmpeg open no file in the work directory, not even as root: a
+# sandbox can keep it out. ffmpeg then reads and writes pipes that cat feeds
+# and empties. Sets FF_PIPE to `FF_PIPE` and FF_PIPE_OUT to the muxer for the
+# pipe. The file protocol opens a pipe through /proc when the build has no pipe protocol.
+ff_check_dir() {
+	local probe=$RUN_DIR/probe out
+	printf 'imgv' > "$probe" || return 0
+	out=$(ffmpeg -nostdin -hide_banner -v error -i "$probe" 2>&1 < /dev/null)
+	rm -f -- "$probe"
+	[[ $out == *'Permission denied'* || $out == *'Operation not permitted'* ]] || return 0
+	FF_PIPE=1 FF_IN=/proc/self/fd/0 FF_OUTPUT=/proc/self/fd/1
+	if [[ $(ffmpeg -hide_banner -protocols 2>/dev/null) == *[[:space:]]pipe[[:space:]]* ]]; then
+		FF_IN=pipe:0 FF_OUTPUT=pipe:1
+	fi
+	if ff_has mx image2pipe; then
+		FF_PIPE_OUT=image2pipe
+	elif ff_has mx mov; then
+		FF_PIPE_OUT=mov
+	else
+		status "ffmpeg may not open the files in $RUN_DIR, and it has no muxer for a pipe: only PNG files have a preview"
+		return 0
+	fi
+	status "ffmpeg may not open the files in $RUN_DIR: previews go through pipes, with no draft stage"
+}
+
 # Succeeds when ffmpeg has the part $2 of the kind $1: dx, mx, dec or enc.
 ff_has() {
 	[[ $FF_HAS == *" $1:$2 "* ]]
@@ -58,6 +83,7 @@ job_main() {
 # The main loop stops a job with TERM. The job removes its own directory.
 job_abort() {
 	(( JOB_CHILD )) && kill "$JOB_CHILD" 2>/dev/null
+	[[ -s $JOB_OUT/pipe.pid ]] && kill "$(< "$JOB_OUT/pipe.pid")" 2>/dev/null
 	rm -rf -- "$JOB_OUT"
 	exit 143
 }
@@ -70,6 +96,21 @@ job_run() {
 	wait "$JOB_CHILD"
 	local rc=$?
 	JOB_CHILD=0
+	return "$rc"
+}
+
+# job_pipe IN OUT COMMAND... feeds the file IN to the input of the command and
+# writes its output to the file OUT. cat opens both files, the command none.
+job_pipe() {
+	local in=$1 out=$2 rc
+	shift 2
+	cat -- "$in" | {
+		"$@" <&0 &
+		echo "$!" > "$JOB_OUT/pipe.pid"
+		wait "$!"
+	} | cat > "$out"
+	rc=${PIPESTATUS[1]}
+	rm -f -- "$JOB_OUT/pipe.pid"
 	return "$rc"
 }
 
@@ -231,24 +272,30 @@ job_image() {
 	fi
 
 	# why names what this ffmpeg lacks for the file.
-	local dec='' why=''
+	# pd is the demuxer that reads the format from a pipe.
+	local dec='' pd='' why=''
 	case $format in
-		PNG) dec=png ;;
-		JPEG) dec=mjpeg ;;
-		GIF) dec=gif ;;
-		BMP) dec=bmp ;;
-		WebP) dec=webp ;;
-		TIFF) dec=tiff ;;
-		EXR) dec=exr ;;
+		PNG) dec=png pd=png_pipe ;;
+		JPEG) dec=mjpeg pd=jpeg_pipe ;;
+		GIF) dec=gif pd=gif ;;
+		BMP) dec=bmp pd=bmp_pipe ;;
+		WebP) dec=webp pd=webp_pipe ;;
+		TIFF) dec=tiff pd=tiff_pipe ;;
+		EXR) dec=exr pd=exr_pipe ;;
 	esac
 	if (( ! HAVE_FFMPEG )); then
 		why='ffmpeg is not installed'
 	elif [[ -z $FF_OUT ]]; then
 		why='this ffmpeg cannot write PNG files'
+	elif (( FF_PIPE )) && [[ -z $FF_PIPE_OUT ]]; then
+		why='ffmpeg may not open the work files, and it has no muxer for a pipe'
 	elif [[ -n $dec ]] && ! ff_has dec "$dec"; then
 		why="this ffmpeg has no $dec decoder"
-	elif [[ -n $dec ]] && ! ff_has dx image2 && ! ff_has dx "${dec}_pipe" && ! ff_has dx "$dec" &&
-		! { [[ $format == PNG ]] && ff_has dx mov; }; then
+	elif [[ $format == PNG ]] && ff_has dx mov; then
+		:
+	elif (( FF_PIPE )) && [[ -n $pd ]] && ! ff_has dx "$pd"; then
+		why="this ffmpeg cannot read $format files from a pipe: it has no $pd demuxer"
+	elif [[ -n $dec ]] && ! ff_has dx image2 && ! ff_has dx "$pd" && ! ff_has dx "${dec}_pipe" && ! ff_has dx "$dec"; then
 		why="this ffmpeg cannot read $format files"
 	fi
 
@@ -283,8 +330,8 @@ job_image() {
 	fi
 	fit_px "$w" "$h" "$THUMB_EDGE" "$THUMB_EDGE"
 	local thumb_w=$FIT_W thumb_h=$FIT_H stages=1
-	# A draft stage is useful only when the last stage holds more detail.
-	(( ! up && out_w * 2 > thumb_w * 3 )) && stages=2
+	# A draft helps only when the last stage holds more detail. A pipe carries one picture.
+	(( ! up && ! FF_PIPE && out_w * 2 > thumb_w * 3 )) && stages=2
 	job_write geom "$w $h $stages"
 
 	local turn=
@@ -297,25 +344,33 @@ job_image() {
 		7) turn=transpose=3, ;;
 		8) turn=transpose=2, ;;
 	esac
-	# ffmpeg reads the file through a link, so no file name can look like an option or a sequence pattern.
-	ln -s -- "$path" "$JOB_OUT/src"
-	local -a input=(-noautorotate -i "$JOB_OUT/src")
-	if [[ $format == PNG ]] && ! ff_has dx image2 && ! ff_has dx png_pipe; then
-		if ! mov_wrap "$path" "$META_width" "$META_height" "$JOB_OUT/src.mov"; then
+	# ffmpeg reads the file feed under the name src. A link keeps a file name from looking like an option or a sequence pattern.
+	local feed=$path src=$JOB_OUT/src
+	if (( FF_PIPE )); then
+		src=$FF_IN
+	elif ! ln -s -- "$path" "$src"; then
+		job_write err "cannot make a link in $JOB_OUT"
+		return
+	fi
+	local -a input=(-noautorotate -i "$src")
+	if [[ $format == PNG ]] && ! ff_has dx png_pipe && { (( FF_PIPE )) || ! ff_has dx image2; }; then
+		feed=$JOB_OUT/src.mov
+		if ! mov_wrap "$path" "$META_width" "$META_height" "$feed"; then
 			job_write err 'cannot read the file'
 			return
 		fi
-		input=(-noautorotate -f mov -i "$JOB_OUT/src.mov")
+		(( FF_PIPE )) || src=$feed
+		input=(-noautorotate -f mov -i "$src")
 	fi
 	# The filter that puts the sRGB curve on a picture that holds linear light.
 	local curve='if(lte(val/maxval,0.0031308),12.92*val,(1.055*pow(val/maxval,1/2.4)-0.055)*maxval)'
 	local srgb="lutrgb=r='$curve':g='$curve':b='$curve',"
 	case $format in
 		EXR)
-			input=(-i "$JOB_OUT/src")
+			input=(-i "$src")
 			if [[ $(ffmpeg -hide_banner -h decoder=exr 2>/dev/null) == *apply_trc* ]]; then
 				# This decoder applies the curve.
-				input=(-apply_trc iec61966_2_1 -i "$JOB_OUT/src")
+				input=(-apply_trc iec61966_2_1 -i "$src")
 			elif [[ ${META_color-} == @(RGBA|Gray+Alpha) ]]; then
 				turn="format=gbrap16le,$srgb"
 			else
@@ -323,15 +378,17 @@ job_image() {
 			fi
 			;;
 		HDR)
-			if [[ ${META_scan_order-} == '-Y +X' ]] && ff_has dec hdr && { ff_has dx image2 || ff_has dx hdr_pipe; }; then
+			if [[ ${META_scan_order-} == '-Y +X' ]] && ff_has dec hdr && { ff_has dx hdr_pipe || { (( ! FF_PIPE )) && ff_has dx image2; }; }; then
 				# This ffmpeg reads the format. Its output is linear light, so the sRGB curve follows here.
-				input=(-i "$JOB_OUT/src")
+				input=(-i "$src")
 				turn="format=gbrp16le,$srgb"
 			elif ! ff_has dx rawvideo; then
 				job_write err 'this ffmpeg cannot read Radiance files: it has no hdr decoder and no rawvideo demuxer'
 				return
 			elif job_radiance "$path" "$w" "$h" "$out_w" "$out_h"; then
-				input=(-f rawvideo -pixel_format "$RAD_FORMAT" -video_size "${w}x$RAD_ROWS" -i "$JOB_OUT/planes")
+				feed=$JOB_OUT/planes
+				(( FF_PIPE )) || src=$feed
+				input=(-f rawvideo -pixel_format "$RAD_FORMAT" -video_size "${w}x$RAD_ROWS" -i "$src")
 				turn=$RAD_FILTER
 			else
 				job_write err 'this Radiance file has a layout that the decoder does not know'
@@ -341,21 +398,32 @@ job_image() {
 	esac
 	local pix='format=pix_fmts=rgb24|rgba|gray|ya8' graph
 	local -a enc=(-frames:v 1 -c:v png -pred mixed -f image2 -update 1) outs
-	local ext=png n
-	if [[ $FF_OUT == mov ]]; then
+	local ext=png n out=$JOB_OUT/1.png
+	local -a run=(job_run)
+	if (( FF_PIPE )); then
+		# A mov file on a pipe must be fragmented: the muxer cannot go back to write the index.
+		if [[ $FF_PIPE_OUT == mov ]]; then
+			enc=(-frames:v 1 -c:v png -pred mixed -f mov -movflags frag_keyframe+empty_moov)
+			ext=mov
+		else
+			enc=(-frames:v 1 -c:v png -pred mixed -f image2pipe)
+		fi
+		out=$FF_OUTPUT
+		run=(job_run job_pipe "$feed" "$JOB_OUT/1.$ext")
+	elif [[ $FF_OUT == mov ]]; then
 		enc=(-frames:v 1 -c:v png -pred mixed -f mov)
-		ext=mov
+		ext=mov out=$JOB_OUT/1.mov
 	fi
 	if (( stages == 2 )); then
 		graph="[0:v]${turn}split=2[a][b];"
 		graph+="[a]scale=${thumb_w}:${thumb_h}:flags=${draft},${pix}[t];"
 		graph+="[b]scale=${out_w}:${out_h}:flags=${flt},${pix}[f]"
-		outs=(-map '[t]' "${enc[@]}" "$JOB_OUT/1.$ext" -map '[f]' "${enc[@]}" "$JOB_OUT/2.$ext")
+		outs=(-map '[t]' "${enc[@]}" "$out" -map '[f]' "${enc[@]}" "$JOB_OUT/2.$ext")
 	else
 		graph="[0:v]${turn}scale=${out_w}:${out_h}:flags=${flt},${pix}[f]"
-		outs=(-map '[f]' "${enc[@]}" "$JOB_OUT/1.$ext")
+		outs=(-map '[f]' "${enc[@]}" "$out")
 	fi
-	if ! job_run ffmpeg -nostdin -y -v error "${input[@]}" \
+	if ! "${run[@]}" ffmpeg -nostdin -y -v error "${input[@]}" \
 		-filter_complex "$graph" "${outs[@]}" 2> "$JOB_OUT/log"; then
 		local reason=
 		[[ -s $JOB_OUT/log ]] && reason=$(tail -n 1 -- "$JOB_OUT/log")

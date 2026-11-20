@@ -39,8 +39,9 @@ mov_box() {
 }
 
 # mov_wrap PNG WIDTH HEIGHT OUT writes a mov file with the PNG file as its one frame.
+# The moov box comes before the frame, so ffmpeg can read the file from a pipe.
 mov_wrap() {
-	local png=$1 w=$2 h=$3 out=$4 size head stbl moov
+	local png=$1 w=$2 h=$3 out=$4 size ftyp moov
 	size=$(wc -c < "$png") || return 1
 	size=${size//[!0-9]/}
 	[[ -n $size ]] || return 1
@@ -50,11 +51,26 @@ mov_wrap() {
 	mov_u32 0x200
 	mov_type 'qt  '
 	mov_box ftyp
-	# The data of the frame starts at a later byte: behind the bytes of ftyp and the head of mdat.
+	ftyp=$MOV_E
+	# The frame starts behind ftyp, moov and the head of mdat. The length of moov does not change with the offset.
+	mov_moov "$w" "$h" "$size" 0
+	mov_moov "$w" "$h" "$size" $(( (${#ftyp} + ${#MOV_E}) / 4 + 8 ))
+	moov=$MOV_E
+	MOV_E=
 	mov_u32 $(( size + 8 ))
 	mov_type mdat
-	head=$MOV_E
 
+	{
+		# shellcheck disable=SC2059 # the text holds only byte escapes
+		printf "$ftyp$moov$MOV_E"
+		cat -- "$png"
+	} > "$out"
+}
+
+# mov_moov WIDTH HEIGHT SIZE OFFSET sets. MOV_E to the moov box of one PNG
+# frame of SIZE bytes at the byte OFFSET of the file.
+mov_moov() {
+	local w=$1 h=$2 size=$3 off=$4 stbl
 	MOV_E=
 	mov_zero 6
 	mov_u16 1
@@ -101,7 +117,7 @@ mov_wrap() {
 	MOV_E=
 	mov_u32 0
 	mov_u32 1
-	mov_u32 28
+	mov_u32 "$off"
 	mov_box stco
 	stbl+=$MOV_E
 	MOV_E=$stbl
@@ -187,15 +203,6 @@ mov_wrap() {
 	mov_box mvhd
 	MOV_E+=$trak
 	mov_box moov
-	moov=$MOV_E
-
-	{
-		# shellcheck disable=SC2059 # the text holds only byte escapes
-		printf "$head"
-		cat -- "$png"
-		# shellcheck disable=SC2059
-		printf "$moov"
-	} > "$out"
 }
 
 # mov_extract MOV OUT copies the data of the mdat box to OUT. ffmpeg writes
