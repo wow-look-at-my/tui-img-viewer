@@ -13,7 +13,7 @@ deny() {
 for arg; do
 	case ${JAIL_PIPES-}:$arg in
 		*:"${TMPDIR:-/tmp}"/imgv.* | 1:/proc/* | 1:pipe:*) deny ;;
-		user:/proc/self/fd/[01]) [ "$(stat -L -c %a "$arg")" = 666 ] || deny ;;
+		user:/proc/self/fd/[01]) [ "$(stat -L -c %a "/proc/$$/fd/${arg##*/}")" = 666 ] || deny ;;
 	esac
 done
 IFS=:
