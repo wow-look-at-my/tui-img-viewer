@@ -185,6 +185,7 @@ main() {
 
 	RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/$PROG.XXXXXX") || die 'cannot create a work directory'
 	trap cleanup EXIT
+	(( HAVE_FFMPEG )) && ff_check_dir
 	trap 'exit 130' INT
 	trap 'exit 143' TERM HUP
 	trap 'RESIZED=1' WINCH
