@@ -3,19 +3,25 @@
 # When the selection is done, the images near it load ahead.
 
 # The selection changed. Stops the work for the entry and starts the rest
-# timer for the new entry. A finished job of the new entry shows at once.
+# timer for the new entry. A finished job of the new entry shows at once. With
+# "keep", a move from one image to the next keeps the picture until the new
+# one is in the terminal. The pane does not go blank.
 preview_reset() {
-	local key=
+	local key='' keep=0
 	if (( N > 0 )); then
 		job_args "$CUR"
 		key=$JA_KEY
+		[[ ${1-} == keep && $JA_KIND == image ]] && (( SHOWN_ID && JA_ARGS[0] > 0 )) && keep=1
 	fi
 	# A preload of the new entry continues as its own job.
 	[[ -n $PF_KEY && $PF_KEY == "$key" ]] || pf_stop
 	(( TX_ACTIVE )) && [[ $TX_OWNER == cur ]] && tx_abort
 	job_kill
-	image_hide
+	AH_FULL=0
+	ah_prune
+	(( keep )) || image_hide
 	JOB_INFO=() PV_TEXT=() PV_KIND=none PV_MSG=
+	(( keep )) && PV_KIND=image
 	GOT_INFO=0 GOT_TEXT=0 GOT_ERR=0 GOT_GEOM=0
 	STAGES=0 STAGE_DONE=0 TX_STAGE=0
 	CUR_KEY=$key PF_NONE=0
@@ -23,7 +29,7 @@ preview_reset() {
 	PENDING=1 PENDING_AT=$NOW
 	D_DETAILS=1 D_PREVIEW=1
 	[[ -n $key ]] || return 0
-	if (( ! HS_PENDING && NOW >= CELL_WAIT_UNTIL )) && { [[ $PF_KEY == "$key" ]] || cache_find "$key"; }; then
+	if (( ! HS_PENDING && NOW >= CELL_WAIT_UNTIL )) && { [[ $PF_KEY == "$key" ]] || cache_find "$key" || ah_find "$key"; }; then
 		job_start
 		job_poll
 	fi
@@ -34,9 +40,17 @@ preview_restart() {
 	preview_reset
 }
 
+# A job that still runs goes on as a decode ahead. ah_prune stops it when its
+# entry is not near the selection.
 job_kill() {
 	if (( JOB_PID && ! JOB_FINISHED )); then
-		kill "$JOB_PID" 2>/dev/null
+		if [[ -z $JOB_KEY ]]; then
+			kill "$JOB_PID" 2>/dev/null
+		elif [[ -e $JOB_DIR/done ]]; then
+			cache_add "$JOB_KEY" "$JOB_DIR"
+		else
+			ah_keep "$JOB_KEY" "$JOB_DIR" "$JOB_PID"
+		fi
 	fi
 	JOB_DIR='' JOB_PID=0 JOB_KEY='' JOB_FINISHED=0
 }
@@ -77,13 +91,15 @@ job_start() {
 	if [[ -n $PF_DIR && $PF_KEY == "$JA_KEY" ]]; then
 		JOB_DIR=$PF_DIR JOB_PID=$PF_PID JOB_KEY=$PF_KEY
 		pf_clear
+	elif ah_take "$JA_KEY"; then
+		JOB_DIR=$AH_TAKEN_DIR JOB_PID=$AH_TAKEN_PID JOB_KEY=$JA_KEY
 	else
 		JOB_DIR=$RUN_DIR/job$(( ++JOB_SEQ )) JOB_KEY=$JA_KEY
 		mkdir -p -- "$JOB_DIR" || { status 'cannot create a work directory'; JOB_DIR=; return 0; }
 		job_spawn "$JA_KIND" "$JA_PATH" "$JOB_DIR" "${JA_ARGS[@]}"
 		JOB_PID=$REPLY
 	fi
-	if [[ $JA_KIND == image ]] && (( JA_ARGS[0] > 0 )); then
+	if [[ $JA_KIND == image && $PV_KIND != image ]] && (( JA_ARGS[0] > 0 )); then
 		PV_KIND=msg PV_MSG='loading…' D_PREVIEW=1
 	fi
 }
@@ -123,6 +139,7 @@ job_poll() {
 	fi
 	if (( ! GOT_ERR )) && [[ -e $dir/err ]]; then
 		IFS= read -r PV_MSG < "$dir/err"
+		image_hide
 		GOT_ERR=1 PV_KIND=error D_PREVIEW=1 D_DETAILS=1
 	fi
 	if (( ! GOT_GEOM )) && [[ -e $dir/geom ]]; then
@@ -170,6 +187,123 @@ stage_send() {
 	tx_begin "$dir/s$stage.b64" "$STAGE_BYTES"
 }
 
+# Decode ahead: jobs for the images near the selection run while the terminal
+# still receives other images. A finished job joins the cache.
+
+# Sets REPLY to the index of the running job with the key $1.
+ah_find() {
+	local i
+	for (( i = 0; i < ${#AH_KEY[@]}; i++ )); do
+		if [[ ${AH_KEY[i]} == "$1" ]]; then
+			REPLY=$i
+			return 0
+		fi
+	done
+	return 1
+}
+
+ah_remove() {
+	local i=$1
+	AH_KEY=("${AH_KEY[@]:0:i}" "${AH_KEY[@]:i+1}")
+	AH_DIR=("${AH_DIR[@]:0:i}" "${AH_DIR[@]:i+1}")
+	AH_PID=("${AH_PID[@]:0:i}" "${AH_PID[@]:i+1}")
+}
+
+# Takes the job with the key $1 out of the list. Sets AH_TAKEN_DIR and AH_TAKEN_PID.
+ah_take() {
+	ah_find "$1" || return 1
+	AH_TAKEN_DIR=${AH_DIR[REPLY]} AH_TAKEN_PID=${AH_PID[REPLY]}
+	ah_remove "$REPLY"
+}
+
+# ah_keep KEY DIR PID puts a job that still runs into the list.
+ah_keep() {
+	AH_KEY+=("$1") AH_DIR+=("$2") AH_PID+=("$3")
+	AH_FULL=0
+}
+
+# Moves the finished jobs to the cache.
+ah_sweep() {
+	local i
+	for (( i = ${#AH_KEY[@]} - 1; i >= 0; i-- )); do
+		[[ -e ${AH_DIR[i]}/done ]] || continue
+		cache_add "${AH_KEY[i]}" "${AH_DIR[i]}"
+		ah_remove "$i"
+		AH_FULL=0
+	done
+}
+
+# Sets NEAR to the keys of the images near the selection and NEAR_I to their
+# indexes. The nearest come first, and of those the one in the direction of the last move.
+near_images() {
+	local d s i
+	NEAR=() NEAR_I=()
+	for (( d = 1; d <= PRELOAD_RADIUS; d++ )); do
+		for s in "$MOVE_DIR" $(( -MOVE_DIR )); do
+			i=$(( CUR + s * d ))
+			(( i >= 0 && i < N )) || continue
+			(( E_IMG[i] )) || continue
+			job_args "$i"
+			NEAR+=("$JA_KEY") NEAR_I+=("$i")
+		done
+	done
+}
+
+# Stops the jobs for images that are no longer near the selection.
+ah_prune() {
+	(( ${#AH_KEY[@]} )) || return 0
+	near_images
+	local i j keep cur=''
+	if (( N > 0 )); then
+		job_args "$CUR"
+		cur=$JA_KEY
+	fi
+	for (( i = ${#AH_KEY[@]} - 1; i >= 0; i-- )); do
+		keep=0
+		[[ ${AH_KEY[i]} == "$cur" ]] && keep=1
+		for (( j = 0; j < ${#NEAR[@]}; j++ )); do
+			[[ ${NEAR[j]} == "${AH_KEY[i]}" ]] && keep=1
+		done
+		(( keep )) && continue
+		if [[ -e ${AH_DIR[i]}/done ]]; then
+			cache_add "${AH_KEY[i]}" "${AH_DIR[i]}"
+		else
+			kill "${AH_PID[i]}" 2>/dev/null
+		fi
+		ah_remove "$i"
+	done
+}
+
+# Stops every job of the list.
+ah_stop() {
+	local i
+	for (( i = 0; i < ${#AH_PID[@]}; i++ )); do
+		kill "${AH_PID[i]}" 2>/dev/null
+	done
+	AH_KEY=() AH_DIR=() AH_PID=()
+}
+
+# Starts jobs for the near images that have no result yet, AH_MAX at a time.
+ah_spawn() {
+	(( ! AH_FULL && ${#AH_KEY[@]} < AH_MAX )) || return 0
+	near_images
+	local j key dir
+	for (( j = 0; j < ${#NEAR[@]} && ${#AH_KEY[@]} < AH_MAX; j++ )); do
+		key=${NEAR[j]}
+		[[ $key == "$PF_KEY" || $PF_SKIP == *$'\n'"$key"$'\n'* ]] && continue
+		res_find "$key" && continue
+		cache_find "$key" && continue
+		ah_find "$key" && continue
+		job_args "${NEAR_I[j]}"
+		dir=$RUN_DIR/job$(( ++JOB_SEQ ))
+		mkdir -p -- "$dir" || return 0
+		job_spawn "$JA_KIND" "$JA_PATH" "$dir" "${JA_ARGS[@]}"
+		ah_keep "$key" "$dir" "$REPLY"
+	done
+	(( ${#AH_KEY[@]} < AH_MAX )) && AH_FULL=1
+	return 0
+}
+
 # Stops the preload: its transfer and its job.
 pf_stop() {
 	[[ -n $PF_KEY ]] || return 0
@@ -178,7 +312,7 @@ pf_stop() {
 		if [[ -e $PF_DIR/done ]]; then
 			cache_add "$PF_KEY" "$PF_DIR"
 		else
-			kill "$PF_PID" 2>/dev/null
+			ah_keep "$PF_KEY" "$PF_DIR" "$PF_PID"
 		fi
 	fi
 	pf_clear
@@ -205,6 +339,10 @@ pf_pick() {
 				PF_DIR=$REPLY PF_FINISHED=1
 				return 0
 			fi
+			if ah_take "$JA_KEY"; then
+				PF_DIR=$AH_TAKEN_DIR PF_PID=$AH_TAKEN_PID
+				return 0
+			fi
 			PF_DIR=$RUN_DIR/job$(( ++JOB_SEQ ))
 			if ! mkdir -p -- "$PF_DIR"; then
 				pf_clear
@@ -221,10 +359,12 @@ pf_pick() {
 
 # One step of the preload. It waits until the selection has its whole preview.
 preload_tick() {
-	log "DBG pt gfx=$GFX pend=$PENDING hs=$HS_PENDING cw=$(( CELL_WAIT_UNTIL - NOW )) jd=${JOB_DIR:+y} jf=$JOB_FINISHED geom=$GOT_GEOM sd=$STAGE_DONE st=$STAGES txa=$TX_ACTIVE own=$TX_OWNER pf=${PF_KEY:+y} pff=$PF_FINISHED none=$PF_NONE chk=$TX_CHECK_UNTIL retry=$(( TX_RETRY_AT - NOW )) pv=$PV_KIND"
 	(( PRELOAD && N > 0 )) && [[ $GFX == on ]] || return 0
 	(( ! PENDING && ! HS_PENDING && NOW >= CELL_WAIT_UNTIL && NOW - PENDING_AT >= DEBOUNCE_MS )) || return 0
 	[[ -z $JOB_DIR ]] || (( JOB_FINISHED )) || return 0
+	# The jobs of the near images run while the selection still goes to the terminal.
+	ah_sweep
+	ah_spawn
 	if (( E_IMG[CUR] )) && [[ $PV_KIND != error ]]; then
 		(( GOT_GEOM && STAGE_DONE >= STAGES )) || return 0
 	fi
@@ -323,6 +463,8 @@ preview_timeout() {
 	elif (( TX_CHECK_UNTIL || TX_RETRY_AT > NOW )); then
 		REPLY=busy
 	elif [[ -n $PF_KEY ]] && (( ! PF_FINISHED || ! TX_ACTIVE )); then
+		REPLY=busy
+	elif (( ${#AH_KEY[@]} )); then
 		REPLY=busy
 	else
 		REPLY=idle
