@@ -90,9 +90,10 @@ Bright areas of an EXR or HDR picture clip at white. The decoder for `.hdr` is s
 - A key press stops a transfer at once. A small draft arrives first, and the full preview replaces it when you stay on the file.
 - `+` and `-` change the preview quality, which is the number of bytes on the link.
 - A finished image stays in the terminal. When you return to it, it shows at once, with no new transfer.
-- While the selection rests, the images next to it load ahead. `--no-preload` turns this off.
+- While the selection rests, the images next to it load ahead: two decode at the same time. Each goes to the terminal when it is ready. `--no-preload` turns this off.
+- A move to an image that is not ready yet keeps the picture until the new one arrives. The pane does not go blank.
 - `f` changes the scaling from smooth to nearest, which keeps the pixels of a small image sharp. `--filter nearest` starts with it.
-- A terminal that answers nothing gets a fixed send rate (`--rate`). The program then watches the byte counters of tmux. When tmux dropped part of an image, the image goes out again at half the rate.
+- A terminal that answers nothing gets a start send rate (`--rate`). The program then watches the byte counters of tmux. Each image that tmux takes whole makes the rate grow by half. When tmux dropped part of an image, the image goes out again at half the rate.
 
 In tmux, the program turns on `allow-passthrough` for its own pane and restores it on exit. The tmux client must be in UTF-8 mode: use a UTF-8 locale or attach with `tmux -u`. The program says so when it is not.
 

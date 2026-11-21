@@ -250,14 +250,18 @@ job_meta_lines() {
 
 # Publishes the PNG file $2 as stage $1 with the pixel size $3 x $4.
 job_stage() {
-	local n=$1 png=$2 data i
-	data=$(set -o pipefail; base64 < "$png" | tr -d '\n') || return 1
-	local bytes=${#data}
-	(( bytes > 0 )) || return 1
-	# The file holds one line for each graphics command of the transfer.
-	for (( i = 0; i < bytes; i += CHUNK )); do
-		printf '%s\n' "${data:i:CHUNK}"
-	done > "$JOB_OUT/.s$n.b64" || return 1
+	local n=$1 png=$2 size bytes
+	size=$(wc -c < "$png") || return 1
+	size=${size//[!0-9]/}
+	(( size > 0 )) || return 1
+	# base64 writes a few characters for each group of a few bytes.
+	bytes=$(( (size + 2) / 3 ))
+	bytes=$(( bytes * 4 ))
+	# The file holds one line for each graphics command of the transfer. fold
+	# splits the lines.
+	{
+		(set -o pipefail; base64 < "$png" | tr -d '\n' | fold -w "$CHUNK") && echo
+	} > "$JOB_OUT/.s$n.b64" || return 1
 	job_write "s$n.dim" "$3 $4 $bytes"
 	mv -- "$JOB_OUT/.s$n.b64" "$JOB_OUT/s$n.b64"
 }
@@ -375,6 +379,16 @@ job_image() {
 		return
 	fi
 	local -a input=(-noautorotate "${inp[@]}")
+	# The jpeg decoder can give a half, a quarter or an eighth of the picture at once.
+	# This is much faster for a photo that is much larger than its preview.
+	if [[ $format == JPEG ]]; then
+		local k=0 tw=$out_w th=$out_h
+		(( orient >= 5 )) && tw=$out_h th=$out_w
+		while (( k < 3 && (META_width >> (k + 1)) >= tw && (META_height >> (k + 1)) >= th )); do
+			(( k++ ))
+		done
+		(( k )) && input=(-noautorotate -lowres "$k" "${inp[@]}")
+	fi
 	if [[ $format == PNG ]] && ! ff_has dx png_pipe && { (( FF_PIPE )) || ! ff_has dx image2; }; then
 		feed=$JOB_OUT/src.mov
 		if ! mov_wrap "$path" "$META_width" "$META_height" "$feed"; then

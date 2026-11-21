@@ -13,7 +13,7 @@ Options:
   -q, --quality LEVEL  preview quality: draft, normal, fine, full (default: normal)
   -f, --filter MODE    scaling: smooth or nearest (default: smooth)
       --no-preload     load only the selected image, not the images near it
-      --rate KIB       send rate in KiB/s when the terminal gives no answers (default: 128)
+      --rate KIB       start send rate in KiB/s when the terminal gives no answers (default: 128)
       --log FILE       append what ffmpeg can do and each failed preview, with ffmpeg's full output
   -h, --help           show this text
   -V, --version        show the version
@@ -101,6 +101,7 @@ cleanup() {
 	fi
 	job_kill
 	pf_stop
+	ah_stop
 	tmux_restore
 	[[ -n $RUN_DIR ]] && rm -rf -- "$RUN_DIR"
 	return 0

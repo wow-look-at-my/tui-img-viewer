@@ -23,6 +23,7 @@ readonly WIN_START=16384      # first window size
 readonly WIN_MIN=4096
 readonly WIN_MAX=524288
 readonly WIN_TARGET_MS=250    # one window must drain in about this time
+readonly RATE_MAX=8388608      # the send rate without flow control grows to this, in bytes per second
 
 # Rendering.
 readonly THUMB_EDGE=256                        # long edge of the draft stage, in pixels
@@ -32,6 +33,7 @@ readonly DIRECT_PNG_MAX=196608   # a PNG file below this size goes to the termin
 readonly MAX_UPSCALE=4           # a small image grows by this factor at most
 readonly CACHE_MAX=48            # finished preview jobs kept for the session
 readonly PRELOAD_RADIUS=2        # images on each side of the selection that load ahead
+readonly AH_MAX=2                # jobs for near images that run at the same time
 readonly RES_MAX=90              # finished images that stay in the terminal
 readonly RES_BUDGET=67108864     # their pixels, at a few bytes each, stay below this size
 readonly SLOT_MAX=100
@@ -98,6 +100,7 @@ state_init() {
 	IMG_W=0 IMG_H=0 STAGES=0 STAGE_DONE=0 TX_STAGE=0 STAGE_W=0 STAGE_H=0 STAGE_BYTES=0
 	BOX_X=0 BOX_Y=0 BOX_C=0 BOX_R=0
 	CACHE_KEY=() CACHE_DIR=()
+	AH_KEY=() AH_DIR=() AH_PID=() AH_FULL=0 AH_TAKEN_DIR='' AH_TAKEN_PID=0 NEAR=() NEAR_I=()
 
 	# Graphics and link state.
 	GFX=unknown ACK_MODE=unknown

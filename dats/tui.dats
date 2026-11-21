@@ -353,6 +353,27 @@ tests:
 			- "image 1: 586x440 complete"
 			- "images: 1"
 
+	- desc: a terminal that answers nothing still gets the near image ahead, and it shows at once
+	  timeout: 60s
+	  cmd: FAKE_MUTE=1 bash dats/lib/drive.sh dats/fixtures/browse w:9 k:jj w:0.3 shot:preloaded
+	  outputs:
+		stdout:
+			- "Name     big.jpg"
+			- "Preview  normal 586×440"
+			- "################"
+			- "images: 1"
+
+	- desc: a move to an image that is not ready keeps the old picture, with no blank pane
+	  timeout: 60s
+	  cmd: RATE=20000 IMGV_ARGS=--no-preload bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:jj w:6 k:G w:0.4 shot:jump
+	  outputs:
+		stdout:
+			- "Name     tall.webp"
+			- "################"
+		!stdout:
+			- "loading…"
+			- "156×440 · 12"
+
 	- desc: an image seen before shows again at once, from the terminal, with no new transfer
 	  timeout: 60s
 	  cmd: IMGV_ARGS=--no-preload bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:jj w:4 k:j w:1.5 k:k w:0.3 shot:return

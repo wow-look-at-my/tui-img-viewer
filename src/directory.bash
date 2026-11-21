@@ -171,7 +171,7 @@ select_index() {
 		DIRTY_ROWS+=("$old" "$CUR")
 	fi
 	D_FOOTER=1
-	preview_reset
+	preview_reset keep
 }
 
 # Opens the selection: a directory is entered, an image is zoomed.

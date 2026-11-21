@@ -332,7 +332,15 @@ tx_done() {
 	exec 8<&-
 	TX_ACTIVE=0
 	D_DETAILS=1
-	(( TX_BASE >= 0 )) && TX_CHECK_UNTIL=$(( NOW + CHECK_MS ))
+	if (( TX_BASE >= 0 )); then
+		TX_CHECK_UNTIL=$(( NOW + CHECK_MS ))
+		# tmux took every byte, so the next image goes out faster. A loss halves the rate again.
+		if (( RATE_NOW < RATE_MAX )) && ! tmux_dropped; then
+			(( RATE_NOW = RATE_NOW * 3 / 2 ))
+			(( RATE_NOW > RATE_MAX )) && RATE_NOW=$RATE_MAX
+			rate_window
+		fi
+	fi
 	(( TX_FINAL )) && res_add "$TX_RKEY" "$TX_ID" "$TX_W $TX_H $TX_TOTAL" $(( TX_W * TX_H * 4 ))
 	if [[ $TX_OWNER == pf ]]; then
 		pf_clear
