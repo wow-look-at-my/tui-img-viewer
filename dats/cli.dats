@@ -22,6 +22,7 @@ tests:
 			- "Usage: imgv [options] [directory | file]"
 			- "--no-images"
 			- "--quality LEVEL"
+			- "--log FILE"
 
 	- desc: an unknown option is an error
 	  cmd: dats/lib/run.sh ./imgv --bogus
@@ -50,6 +51,13 @@ tests:
 	  outputs:
 		stderr:
 			- "--rate needs a positive number"
+
+	- desc: a log file that cannot be written is an error
+	  cmd: dats/lib/run.sh ./imgv --log dats/fixtures/browse/missing/imgv.log
+	  exit: 1
+	  outputs:
+		stderr:
+			- "imgv: cannot write the log file: dats/fixtures/browse/missing/imgv.log"
 
 	- desc: a path that does not exist is an error
 	  cmd: dats/lib/run.sh ./imgv dats/fixtures/browse/missing

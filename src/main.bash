@@ -14,6 +14,7 @@ Options:
   -f, --filter MODE    scaling: smooth or nearest (default: smooth)
       --no-preload     load only the selected image, not the images near it
       --rate KIB       send rate in KiB/s when the terminal gives no answers (default: 128)
+      --log FILE       append what ffmpeg can do and each failed preview, with ffmpeg's full output
   -h, --help           show this text
   -V, --version        show the version
 
@@ -46,6 +47,14 @@ parse_args() {
 					[[ $1 == "${QUALITY_NAME[i]}" || $1 == "$i" ]] && QUALITY=$i
 				done
 				(( QUALITY )) || die "unknown quality: $1 (use draft, normal, fine or full)"
+				shift
+				;;
+			--log)
+				(( $# )) || die "$arg needs a value"
+				# imgv changes its directory later, so a relative name becomes absolute here.
+				LOG_FILE=$1
+				[[ $LOG_FILE == /* ]] || LOG_FILE=$PWD/$LOG_FILE
+				: >> "$LOG_FILE" 2> /dev/null || die "cannot write the log file: $1"
 				shift
 				;;
 			--rate)
@@ -185,6 +194,17 @@ main() {
 
 	RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/$PROG.XXXXXX") || die 'cannot create a work directory'
 	trap cleanup EXIT
+	if [[ -n $LOG_FILE ]]; then
+		local ffv='' part parts=''
+		command -v ffmpeg > /dev/null && read -r ffv < <(ffmpeg -version 2>&1)
+		for part in dx:image2 dx:mov dx:rawvideo dx:{png,jpeg,bmp,webp,tiff,exr,hdr}_pipe dx:gif mx:image2 mx:image2pipe mx:mov \
+			dec:{png,mjpeg,gif,bmp,webp,tiff,exr,hdr} enc:png; do
+			ff_has "${part%%:*}" "${part#*:}" && parts+=" $part"
+		done
+		log "== $PROG $VERSION, bash $BASH_VERSION, uid $EUID, work directory $RUN_DIR" \
+			"ffmpeg: ${ffv:-not installed} at $(command -v ffmpeg)" "ffmpeg image parts:${parts:- none}" \
+			"ffmpeg output format: ${FF_OUT:-none}"
+	fi
 	(( HAVE_FFMPEG )) && ff_check_dir
 	trap 'exit 130' INT
 	trap 'exit 143' TERM HUP

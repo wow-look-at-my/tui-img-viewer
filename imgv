@@ -71,7 +71,7 @@ state_init() {
 	READ_FRAC=0 NAP=() NAP_IDLE=() SORT_NAME=() TIME_BUILTIN=0 DATE_OPT=-d DATE_PRE=@
 
 	# Options.
-	QUALITY=2 SHOW_HIDDEN=1 SORT=name RATE_BPS=131072 START_PATH=. FILTER=smooth PRELOAD=1
+	QUALITY=2 SHOW_HIDDEN=1 SORT=name RATE_BPS=131072 START_PATH=. FILTER=smooth PRELOAD=1 LOG_FILE=''
 
 	# Screen geometry, in cells. L = list, P = preview, D = details.
 	ROWS=24 COLS=80 TOO_SMALL=0 ZOOM=0 RESIZED=0
@@ -147,11 +147,18 @@ else
 	}
 fi
 
+# Appends lines to the file of --log. Without --log it does nothing.
+log() {
+	[[ -n $LOG_FILE ]] || return 0
+	printf '%s\n' "$@" >> "$LOG_FILE"
+}
+
 # Shows a message in the footer for a short time.
 status() {
 	# A message can come before the loop runs, when NOW still holds its start value.
 	now_ms
 	STATUS=$1 STATUS_AT=$NOW D_FOOTER=1
+	log "status: $1"
 }
 
 # Sets REPLY to a byte count in a short form, for example "3.4 MiB".
@@ -1962,6 +1969,7 @@ ff_check_dir() {
 	printf 'imgv' > "$probe" || return 0
 	out=$(ffmpeg -nostdin -hide_banner -v error -i "$probe" 2>&1 < /dev/null)
 	rm -f -- "$probe"
+	log "ffmpeg reads a file in the work directory: ${out:-no message}"
 	[[ $out == *'Permission denied'* || $out == *'Operation not permitted'* ]] || return 0
 	FF_PIPE=1 FF_IN=/proc/self/fd/0 FF_OUTPUT=/proc/self/fd/1
 	if [[ $(ffmpeg -hide_banner -protocols 2>/dev/null) == *[[:space:]]pipe[[:space:]]* ]]; then
@@ -1971,6 +1979,7 @@ ff_check_dir() {
 		ff_open_pipes
 		ffmpeg -nostdin -hide_banner -v error -i "$FF_IN" 2>&1
 	})
+	log "ffmpeg reads a pipe through $FF_IN: ${out:-no message}"
 	if [[ $out == *'Permission denied'* || $out == *'Operation not permitted'* ]]; then
 		FF_WHY="ffmpeg may open neither the files in $RUN_DIR nor a pipe through $FF_IN"
 	elif ff_has mx image2pipe; then
@@ -2051,6 +2060,7 @@ job_pipe() {
 job_write() {
 	local name=$1
 	shift
+	[[ $name == err ]] && log "preview error: $*"
 	printf '%s\n' "$@" > "$JOB_OUT/.$name" && mv -- "$JOB_OUT/.$name" "$JOB_OUT/$name"
 }
 
@@ -2358,10 +2368,18 @@ job_image() {
 		graph="[0:v]${turn}scale=${out_w}:${out_h}:flags=${flt},${pix}[f]"
 		outs=(-map '[f]' "${enc[@]}" "$out")
 	fi
-	if ! "${run[@]}" ffmpeg -nostdin -y -v error "${input[@]}" \
-		-filter_complex "$graph" "${outs[@]}" 2> "$JOB_OUT/log"; then
-		local reason=
+	local -a cmd=(ffmpeg -nostdin -y -v error "${input[@]}" -filter_complex "$graph" "${outs[@]}")
+	if ! "${run[@]}" "${cmd[@]}" 2> "$JOB_OUT/log"; then
+		local reason= line
 		[[ -s $JOB_OUT/log ]] && reason=$(tail -n 1 -- "$JOB_OUT/log")
+		if [[ -n $LOG_FILE ]]; then
+			printf -v line ' %q' "${cmd[@]}"
+			(( FF_PIPE )) && line+=" (input from $feed through a pipe)"
+			log "ffmpeg failed on $path:" "  command:$line"
+			while IFS= read -r line; do
+				log "  ffmpeg: $line"
+			done < "$JOB_OUT/log"
+		fi
 		job_write err "ffmpeg cannot decode this file: ${reason:-no message}"
 		return
 	fi
@@ -3799,6 +3817,7 @@ Options:
   -f, --filter MODE    scaling: smooth or nearest (default: smooth)
       --no-preload     load only the selected image, not the images near it
       --rate KIB       send rate in KiB/s when the terminal gives no answers (default: 128)
+      --log FILE       append what ffmpeg can do and each failed preview, with ffmpeg's full output
   -h, --help           show this text
   -V, --version        show the version
 
@@ -3831,6 +3850,14 @@ parse_args() {
 					[[ $1 == "${QUALITY_NAME[i]}" || $1 == "$i" ]] && QUALITY=$i
 				done
 				(( QUALITY )) || die "unknown quality: $1 (use draft, normal, fine or full)"
+				shift
+				;;
+			--log)
+				(( $# )) || die "$arg needs a value"
+				# imgv changes its directory later, so a relative name becomes absolute here.
+				LOG_FILE=$1
+				[[ $LOG_FILE == /* ]] || LOG_FILE=$PWD/$LOG_FILE
+				: >> "$LOG_FILE" 2> /dev/null || die "cannot write the log file: $1"
 				shift
 				;;
 			--rate)
@@ -3970,6 +3997,17 @@ main() {
 
 	RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/$PROG.XXXXXX") || die 'cannot create a work directory'
 	trap cleanup EXIT
+	if [[ -n $LOG_FILE ]]; then
+		local ffv='' part parts=''
+		command -v ffmpeg > /dev/null && read -r ffv < <(ffmpeg -version 2>&1)
+		for part in dx:image2 dx:mov dx:rawvideo dx:{png,jpeg,bmp,webp,tiff,exr,hdr}_pipe dx:gif mx:image2 mx:image2pipe mx:mov \
+			dec:{png,mjpeg,gif,bmp,webp,tiff,exr,hdr} enc:png; do
+			ff_has "${part%%:*}" "${part#*:}" && parts+=" $part"
+		done
+		log "== $PROG $VERSION, bash $BASH_VERSION, uid $EUID, work directory $RUN_DIR" \
+			"ffmpeg: ${ffv:-not installed} at $(command -v ffmpeg)" "ffmpeg image parts:${parts:- none}" \
+			"ffmpeg output format: ${FF_OUT:-none}"
+	fi
 	(( HAVE_FFMPEG )) && ff_check_dir
 	trap 'exit 130' INT
 	trap 'exit 143' TERM HUP
