@@ -48,6 +48,7 @@ install -m 755 imgv ~/bin/imgv
 imgv                 # browse the current directory
 imgv ~/photos        # browse a directory
 imgv ~/photos/a.jpg  # open the directory with that file selected
+imgv --log imgv.log  # record what ffmpeg can do and the full error of each failed preview
 imgv --help          # every option
 ```
 

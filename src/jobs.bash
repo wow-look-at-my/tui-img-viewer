@@ -447,7 +447,7 @@ job_image() {
 	fi
 	local -a cmd=(ffmpeg -nostdin -y -v error "${input[@]}" -filter_complex "$graph" "${outs[@]}")
 	if ! "${run[@]}" "${cmd[@]}" 2> "$JOB_OUT/log"; then
-		local reason= line
+		local reason='' line
 		[[ -s $JOB_OUT/log ]] && reason=$(tail -n 1 -- "$JOB_OUT/log")
 		if [[ -n $LOG_FILE ]]; then
 			printf -v line ' %q' "${cmd[@]}"
