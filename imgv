@@ -3090,6 +3090,7 @@ pf_pick() {
 
 # One step of the preload. It waits until the selection has its whole preview.
 preload_tick() {
+	log "DBG pt gfx=$GFX pend=$PENDING hs=$HS_PENDING cw=$(( CELL_WAIT_UNTIL - NOW )) jd=${JOB_DIR:+y} jf=$JOB_FINISHED geom=$GOT_GEOM sd=$STAGE_DONE st=$STAGES txa=$TX_ACTIVE own=$TX_OWNER pf=${PF_KEY:+y} pff=$PF_FINISHED none=$PF_NONE chk=$TX_CHECK_UNTIL retry=$(( TX_RETRY_AT - NOW )) pv=$PV_KIND"
 	(( PRELOAD && N > 0 )) && [[ $GFX == on ]] || return 0
 	(( ! PENDING && ! HS_PENDING && NOW >= CELL_WAIT_UNTIL && NOW - PENDING_AT >= DEBOUNCE_MS )) || return 0
 	[[ -z $JOB_DIR ]] || (( JOB_FINISHED )) || return 0
