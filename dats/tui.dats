@@ -365,13 +365,14 @@ tests:
 
 	- desc: a move to an image that is not ready keeps the old picture, with no blank pane
 	  timeout: 60s
-	  cmd: IMGV_ARGS=--no-preload bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:jj w:4 k:G w:0.05 shot:jump
+	  cmd: RATE=20000 IMGV_ARGS=--no-preload bash dats/lib/drive.sh dats/fixtures/browse w:1.5 k:jj w:6 k:G w:0.4 shot:jump
 	  outputs:
 		stdout:
 			- "Name     tall.webp"
 			- "################"
 		!stdout:
 			- "loading…"
+			- "156×440 · 12"
 
 	- desc: an image seen before shows again at once, from the terminal, with no new transfer
 	  timeout: 60s

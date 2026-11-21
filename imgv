@@ -3068,14 +3068,9 @@ stage_send() {
 	[[ -e $dir/s$stage.b64 ]] || return 0
 	read -r STAGE_W STAGE_H STAGE_BYTES < "$dir/s$stage.dim"
 	TX_STAGE=$stage
-	# A later stage of the shown image keeps its id. The terminal then
-	# replaces the picture in place, and the cells stay as they are.
-	if (( SHOWN_ID && STAGE_DONE > 0 )); then
-		TX_ID=$SHOWN_ID
-	else
-		slot_new
-		TX_ID=$REPLY
-	fi
+	# Each stage gets its own id.
+	slot_new
+	TX_ID=$REPLY
 	TX_OWNER=cur TX_C=$BOX_C TX_R=$BOX_R TX_W=$STAGE_W TX_H=$STAGE_H
 	TX_FINAL=$(( stage == STAGES )) TX_RKEY=$CUR_KEY
 	tx_begin "$dir/s$stage.b64" "$STAGE_BYTES"
