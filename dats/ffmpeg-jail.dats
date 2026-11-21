@@ -56,6 +56,27 @@ tests:
 			- "Name     small.png"
 			- "last image: 586x440 complete"
 
+	- desc: --log records the checks of ffmpeg and the pipe mode
+	  timeout: 60s
+	  cmd: log=$(mktemp) && IMGV_PATH=$PWD/dats/lib/ffmpeg-jail:${IMGV_PATH:-$PATH} IMGV_ARGS="--no-preload --log $log" bash dats/lib/drive.sh dats/fixtures/browse w:1 > /dev/null && cat "$log"
+	  outputs:
+		stdout:
+			- "== imgv "
+			- "ffmpeg image parts:"
+			- "ffmpeg reads a file in the work directory: Error opening input files: Permission denied"
+			- "ffmpeg reads a pipe through "
+			- "status: ffmpeg may not open the files in "
+
+	- desc: --log records a failed decode with the command and every line of ffmpeg
+	  timeout: 60s
+	  cmd: log=$(mktemp) && JAIL_PIPES=decode IMGV_PATH=$PWD/dats/lib/ffmpeg-jail:${IMGV_PATH:-$PATH} IMGV_ARGS="--no-preload --log $log" bash dats/lib/drive.sh dats/fixtures/browse w:1 k:/ k:big $'k:\r' w:2 > /dev/null && cat "$log"
+	  outputs:
+		stdout:
+			- "/dats/fixtures/browse/big.jpg:"
+			- "  command: ffmpeg -nostdin -y -v error"
+			- "  ffmpeg: Error opening input files: Permission denied"
+			- "preview error: ffmpeg cannot decode this file: Error opening input files: Permission denied"
+
 	- desc: a sandbox that also blocks the pipe is named, and a PNG file goes as it is
 	  timeout: 60s
 	  cmd: JAIL_PIPES=1 IMGV_PATH=$PWD/dats/lib/ffmpeg-jail:${IMGV_PATH:-$PATH} IMGV_ARGS=--no-preload bash dats/lib/drive.sh dats/fixtures/browse w:1 k:/ k:big $'k:\r' w:2 shot:jpeg k:/ k:small $'k:\r' w:2 shot:png

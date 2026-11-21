@@ -20,11 +20,18 @@ else
 	}
 fi
 
+# Appends lines to the file of --log. Without --log it does nothing.
+log() {
+	[[ -n $LOG_FILE ]] || return 0
+	printf '%s\n' "$@" >> "$LOG_FILE"
+}
+
 # Shows a message in the footer for a short time.
 status() {
 	# A message can come before the loop runs, when NOW still holds its start value.
 	now_ms
 	STATUS=$1 STATUS_AT=$NOW D_FOOTER=1
+	log "status: $1"
 }
 
 # Sets REPLY to a byte count in a short form, for example "3.4 MiB".

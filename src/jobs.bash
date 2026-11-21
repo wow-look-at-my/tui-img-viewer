@@ -46,6 +46,7 @@ ff_check_dir() {
 	printf 'imgv' > "$probe" || return 0
 	out=$(ffmpeg -nostdin -hide_banner -v error -i "$probe" 2>&1 < /dev/null)
 	rm -f -- "$probe"
+	log "ffmpeg reads a file in the work directory: ${out:-no message}"
 	[[ $out == *'Permission denied'* || $out == *'Operation not permitted'* ]] || return 0
 	FF_PIPE=1 FF_IN=/proc/self/fd/0 FF_OUTPUT=/proc/self/fd/1
 	if [[ $(ffmpeg -hide_banner -protocols 2>/dev/null) == *[[:space:]]pipe[[:space:]]* ]]; then
@@ -55,6 +56,7 @@ ff_check_dir() {
 		ff_open_pipes
 		ffmpeg -nostdin -hide_banner -v error -i "$FF_IN" 2>&1
 	})
+	log "ffmpeg reads a pipe through $FF_IN: ${out:-no message}"
 	if [[ $out == *'Permission denied'* || $out == *'Operation not permitted'* ]]; then
 		FF_WHY="ffmpeg may open neither the files in $RUN_DIR nor a pipe through $FF_IN"
 	elif ff_has mx image2pipe; then
@@ -135,6 +137,7 @@ job_pipe() {
 job_write() {
 	local name=$1
 	shift
+	[[ $name == err ]] && log "preview error: $*"
 	printf '%s\n' "$@" > "$JOB_OUT/.$name" && mv -- "$JOB_OUT/.$name" "$JOB_OUT/$name"
 }
 
@@ -442,10 +445,18 @@ job_image() {
 		graph="[0:v]${turn}scale=${out_w}:${out_h}:flags=${flt},${pix}[f]"
 		outs=(-map '[f]' "${enc[@]}" "$out")
 	fi
-	if ! "${run[@]}" ffmpeg -nostdin -y -v error "${input[@]}" \
-		-filter_complex "$graph" "${outs[@]}" 2> "$JOB_OUT/log"; then
-		local reason=
+	local -a cmd=(ffmpeg -nostdin -y -v error "${input[@]}" -filter_complex "$graph" "${outs[@]}")
+	if ! "${run[@]}" "${cmd[@]}" 2> "$JOB_OUT/log"; then
+		local reason='' line
 		[[ -s $JOB_OUT/log ]] && reason=$(tail -n 1 -- "$JOB_OUT/log")
+		if [[ -n $LOG_FILE ]]; then
+			printf -v line ' %q' "${cmd[@]}"
+			(( FF_PIPE )) && line+=" (input from $feed through a pipe)"
+			log "ffmpeg failed on $path:" "  command:$line"
+			while IFS= read -r line; do
+				log "  ffmpeg: $line"
+			done < "$JOB_OUT/log"
+		fi
 		job_write err "ffmpeg cannot decode this file: ${reason:-no message}"
 		return
 	fi
